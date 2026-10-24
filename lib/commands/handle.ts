@@ -2,8 +2,9 @@ import "server-only";
 import type { HydratedDocument, Types } from "mongoose";
 import { applyPlan } from "@/lib/commands/apply";
 import { entryAction } from "@/lib/commands/history";
-import { describeScreen, loadCard, resolveTarget, type LoadedCard } from "@/lib/commands/cards";
+import { describeScreen, findCustomer, loadCard, resolveTarget, type LoadedCard } from "@/lib/commands/cards";
 import { fastCommand } from "@/lib/commands/fastpath";
+import { copyableSpecs } from "@/lib/commands/repeat";
 import {
   PlanOps,
   buildCreatePlan,
@@ -166,6 +167,14 @@ export async function handleCommand(text: string, path: string): Promise<Command
     if (pending.parseLogId) await ParseLog.updateOne({ _id: pending.parseLogId }, { outcome: "cancelled" });
     return { kind: "message", text: "Dropped. Nothing was saved." };
   }
+  if (fast === "send") {
+    const { card } = await describeScreen(path);
+    if (!card) return { kind: "message", text: "Open the card first, then say “bhej do”." };
+    const quote = await Quotation.findOne({ requestId: card.request._id }).sort({ createdAt: -1 });
+    if (!quote) return { kind: "message", text: "There is no quotation on this card yet. Say your rate first." };
+    if (quote.status === "Draft") return { kind: "message", text: "Approve the quotation first, then say “bhej do”." };
+    return { kind: "share", quotationId: quote._id.toString(), text: `Opening WhatsApp for ${quote.number ?? "the quotation"}…` };
+  }
   if (fast === "undo") {
     if (pending && pending.action !== "approve_quote") return { kind: "message", text: "A plan is waiting. Say “approve” or “cancel” for it first, then “undo”." };
     return makeUndoPlan(path, text);
@@ -217,6 +226,14 @@ export async function handleCommand(text: string, path: string): Promise<Command
       params.set("filter", cmd.filter ?? (cmd.query ? "All" : "Pending"));
       if (cmd.query) params.set("q", cmd.query);
       const what = [cmd.filter ? `${cmd.filter.toLowerCase()} cards` : "cards", cmd.query ? `matching “${cmd.query}”` : ""].join(" ").trim();
+      if (path.startsWith("/history")) {
+        const q = cmd.query ? `?q=${encodeURIComponent(cmd.query)}` : "";
+        return {
+          kind: "message",
+          text: `Showing quotations${cmd.query ? ` for “${cmd.query}”` : ""}.${stillWaiting}`,
+          navigateTo: `/history${q}`,
+        };
+      }
       return { kind: "message", text: `Showing ${what}.${stillWaiting}`, navigateTo: `/board?${params.toString()}` };
     }
 
@@ -229,6 +246,42 @@ export async function handleCommand(text: string, path: string): Promise<Command
         text: `${found.note ? `${found.note} ` : ""}Opened ${found.card.state.ref} ${found.card.request.customerName}.${stillWaiting}`,
         navigateTo: `/quote/${found.card.request._id.toString()}`,
       };
+    }
+
+    case "repeat_request": {
+      if (!cmd.target) return { kind: "message", text: "Same as last time for which company? Say the name." };
+      const customer = await findCustomer(cmd.target);
+      if (!customer) return { kind: "message", text: `No earlier order found for “${cmd.target}”.` };
+      // The last quotation that went out is the best record of "last time"; else the newest card.
+      const lastQuote = await Quotation.findOne({ customerId: customer._id, status: { $in: ["Approved", "Sent"] } })
+        .sort({ approvedAt: -1 })
+        .lean();
+      const lastCard = lastQuote ? null : await Request.findOne({ customerId: customer._id, deletedAt: null }).sort({ createdAt: -1 }).lean();
+      const source = lastQuote?.specsSnapshot ?? lastCard?.specs;
+      if (!source) return { kind: "message", text: `No earlier order found for ${customer.company}.` };
+
+      const copied = copyableSpecs(source);
+      const overrides = parsed.request ?? { customer: {}, specs: {}, sizeWithoutUnit: null, dropped: [] };
+      const guarded = {
+        ...overrides,
+        customer: { company: customer.company },
+        specs: { ...copied, ...overrides.specs },
+      };
+      const view = buildCreatePlan(guarded, parsed.unclear, toExisting(customer));
+      const fromWhat = lastQuote
+        ? `quotation ${lastQuote.number ?? ""} of ${(lastQuote.approvedAt ?? lastQuote.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" })}`
+        : `card ${lastCard?.number ? `REQ-${String(lastCard.number).padStart(3, "0")}` : ""}`;
+      view.title = `Same as last time for ${customer.company}`;
+      view.lines.unshift(`Copied from ${fromWhat.replace(/\s+/g, " ").trim()}`);
+      view.warnings.unshift("Rate and terms are not copied. Say them on the new card.");
+      const ops: PlanOps = {
+        kind: "create_request",
+        customer: { company: customer.company },
+        specs: guarded.specs as Record<string, string | number | null>,
+        heard,
+        rawTexts,
+      };
+      return savePlan("create_request", view, ops, text, { parseLogId: log._id, replaces: pending });
     }
 
     case "create_request": {

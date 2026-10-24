@@ -3,6 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import BoxCard from "@/components/BoxCard";
+import { SHARE_EVENT } from "@/components/ShareButton";
 import { CommandResult } from "@/lib/commands/types";
 
 /** Dispatch this on window to put the cursor back in the command box (the header button does). */
@@ -114,6 +115,8 @@ export default function CommandBox({ variant = "command", aside }: { variant?: C
       if (next.kind !== "error") setText("");
       if (next.kind === "message" && next.navigateTo) {
         router.push(next.navigateTo);
+      } else if (next.kind === "share") {
+        window.dispatchEvent(new CustomEvent(SHARE_EVENT, { detail: next.quotationId }));
       } else {
         router.refresh();
       }

@@ -214,6 +214,10 @@ async function applyUndo(plan: Plan, ops: UndoOps): Promise<CommandResult> {
     request.deletedAt = now;
   } else if (action === "stage") {
     request.stage = entry.stageBefore ?? "New";
+    // Undoing "sent": the quotation goes back to approved (not sent).
+    if (entry.quotationId) {
+      await Quotation.updateOne({ _id: entry.quotationId, status: "Sent" }, { status: "Approved", $unset: { sentAt: 1 } });
+    }
   } else if (action === "quote") {
     // Back to draft (it keeps its number) and ask for approval again.
     request.stage = entry.stageBefore ?? "New";

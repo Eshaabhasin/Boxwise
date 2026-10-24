@@ -1,5 +1,6 @@
 import CommandBox from "@/components/CommandBox";
 import SayButton from "@/components/SayButton";
+import ShareButton from "@/components/ShareButton";
 import { formatINR } from "@/lib/calc/money";
 
 export interface QuotationViewData {
@@ -26,6 +27,7 @@ export interface QuotationViewData {
   stillNeeded: string[];
   letterhead: { name: string; line: string };
   pdfUrl: string;
+  share: { quotationId: string; fileName: string; publicPdfUrl: string; phone?: string; sentOn?: string };
 }
 
 function Slip({ title, aside, children }: { title: string; aside: string; children: React.ReactNode }) {
@@ -114,16 +116,29 @@ export default function QuotationView({ q }: { q: QuotationViewData }) {
               {q.status}
             </span>
             <h2 className="max-w-[15ch] font-display text-3xl font-extrabold uppercase leading-[0.95] tracking-[0.005em]">
-              {approved ? "Approved. Ready to send." : q.stillNeeded.length ? "Almost there." : "Check it, then approve."}
+              {q.status === "Sent" ? "Sent." : approved ? "Approved. Ready to send." : q.stillNeeded.length ? "Almost there." : "Check it, then approve."}
             </h2>
             <p className="mt-3 max-w-md text-ink-2">
-              {approved
-                ? `Quotation ${q.quoteNumber} is numbered and frozen. Sending on WhatsApp comes in phase 5; for now, download the PDF.`
+              {q.status === "Sent"
+                ? `Quotation ${q.quoteNumber} went to ${q.company} on ${q.share.sentOn}. Waiting for their reply: say “order mil gaya” or “mana kar diya”.`
+                : approved
+                ? `The PDF and message go to ${q.company} on WhatsApp. Nothing leaves until you press send, or say “bhej do”.`
                 : q.stillNeeded.length
                   ? `Before approving, say: ${q.stillNeeded.join(", ")}.`
                   : "Nothing has been sent. Read the PDF and the message, then approve."}
             </p>
             <div className="mt-5 flex flex-wrap items-center gap-3">
+              {approved && (
+                <ShareButton
+                  quotationId={q.share.quotationId}
+                  fileName={q.share.fileName}
+                  pdfUrl={q.pdfUrl}
+                  publicPdfUrl={q.share.publicPdfUrl}
+                  message={q.message}
+                  phone={q.share.phone}
+                  sent={q.status === "Sent"}
+                />
+              )}
               {!approved && q.stillNeeded.length === 0 && (
                 <>
                   <SayButton

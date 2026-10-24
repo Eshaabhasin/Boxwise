@@ -102,7 +102,7 @@ export async function parseCommand(text: string, llm: LlmClient, opts: ParseOpti
     command = { ...command, target: null };
   }
 
-  const hasFields = command && ["create_request", "edit_request", "set_rate"].includes(command.intent);
+  const hasFields = command && ["create_request", "repeat_request", "edit_request", "set_rate"].includes(command.intent);
   const request =
     hasFields && command
       ? guardRequestFields(command.fields, heardText, { defaultUnit: opts.defaultUnit, allowRate: command.intent === "set_rate" })

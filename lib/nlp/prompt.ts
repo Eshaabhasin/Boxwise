@@ -56,14 +56,15 @@ Return ONLY this JSON object:
 
 Intents:
 - "create_request": a new box request from a customer (a company and box details).
+- "repeat_request": a new card that copies a customer's last order ("same as last time for Sharma Packaging", "Gupta Foods wala pichla order phir se"). target = the company; fields = only what he changes from last time.
 - "edit_request": change details of a card that already exists ("height 9 inch kar do", "quantity 800 karo", "Sharma ka address Bhiwandi daal do"). fields = only the changed fields.
 - "set_rate": the owner gives his rate and/or terms for a card ("rate 18 rupees per box GST 18 percent", "delivery 10 days payment 50 percent advance", "rate 17 karo"). fields = ratePerBox, gstPercent, deliveryTime, paymentTerms, validity, and any other field he changes in the same breath.
-- "search": find or list cards ("Sharma dhundo", "pending dikhao", "won wale dikhao"). query = company words or null; filter = "Pending", "New", "Quoted", "Sent", "Won", "Lost" or "All", or null.
+- "search": find or list cards or quotations ("Sharma dhundo", "pending dikhao", "won wale dikhao", "Sharma ki history", "Gupta ke quotation dikhao"). query = company words or null; filter = "Pending", "New", "Quoted", "Sent", "Won", "Lost" or "All", or null.
 - "open": open one card ("Sharma ka card kholo", "REQ 3 kholo").
 - "set_stage": the order was won or lost, or a card goes back to new ("order mil gaya" = "Won", "mana kar diya" / "order nahi mila" = "Lost"). stage = "Won", "Lost" or "New".
 - "other": anything else.
 
-target: for edit_request, set_rate, open and set_stage, the company name or "REQ <number>" exactly as said; null if he did not name one (he means the card on screen). Always null for create_request.
+target: for repeat_request, edit_request, set_rate, open and set_stage, the company name or "REQ <number>" exactly as said; null if he did not name one (he means the card on screen). Always null for create_request.
 
 Rules:
 1. Include a field ONLY if the speaker said it. Never guess, never add a default, never fill a value that was not said. Leave unsaid fields out completely.
@@ -183,6 +184,26 @@ export const FEW_SHOTS: readonly [Screen, string, object][] = [
     "card REQ-003 Mehta Plastics",
     "1000 box kar do aur rate 14",
     { intent: "set_rate", target: null, fields: { quantity: 1000, ratePerBox: 14 } },
+  ],
+  [
+    "board",
+    "same as last time for Sharma Packaging",
+    { intent: "repeat_request", target: "Sharma Packaging" },
+  ],
+  [
+    "new quote",
+    "Gupta Foods wala pichla order phir se bas 2000 box aur glued",
+    { intent: "repeat_request", target: "Gupta Foods", fields: { quantity: 2000, joint: "Glued" } },
+  ],
+  [
+    "quotation history",
+    "Mehta Plastics ki history",
+    { intent: "search", query: "Mehta Plastics" },
+  ],
+  [
+    "board",
+    "Gupta ke purane quotation dikhao",
+    { intent: "search", query: "Gupta" },
   ],
   [
     "board",

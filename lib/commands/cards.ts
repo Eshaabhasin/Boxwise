@@ -54,6 +54,7 @@ export async function describeScreen(path: string): Promise<{ screen: string; ca
   }
   if (path.startsWith("/quote/new")) return { screen: "new quote", card: null };
   if (path.startsWith("/board")) return { screen: "board", card: null };
+  if (path.startsWith("/history")) return { screen: "quotation history", card: null };
   return { screen: "other", card: null };
 }
 
@@ -92,4 +93,14 @@ export async function resolveTarget(target: string | null, onScreen: LoadedCard 
       ? `${matches.length} cards match “${target}”; using the newest${open.length ? " open" : ""} one, ${card.state.ref}.`
       : undefined;
   return { card, note };
+}
+
+/** A customer by a spoken name ("Sharma Packaging", "Gupta"): exact match first, then the most recent partial match. */
+export async function findCustomer(spoken: string) {
+  const key = companyKey(spoken);
+  if (!key) return null;
+  const exact = await Customer.findOne({ companyKey: key });
+  if (exact) return exact;
+  const pattern = key.split(" ").map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
+  return Customer.findOne({ companyKey: { $regex: pattern } }).sort({ updatedAt: -1 });
 }

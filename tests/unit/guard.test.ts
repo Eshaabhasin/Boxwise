@@ -99,7 +99,7 @@ describe("customer fields", () => {
 describe("prompt examples agree with the guard", () => {
   it.each(FEW_SHOTS.map(([, input, output]) => [input, output] as const))("%s", (input, output) => {
     const parsed = LlmCommandOutput.parse(output);
-    if (!["create_request", "edit_request", "set_rate"].includes(parsed.intent)) return;
+    if (!["create_request", "repeat_request", "edit_request", "set_rate"].includes(parsed.intent)) return;
     const text = input.replace(/^Earlier: /, "").replace(/\. Correction: /, " ");
     const g = guardRequestFields(parsed.fields, normalize(text), { allowRate: parsed.intent === "set_rate" });
     expect(g.dropped).toEqual([]);

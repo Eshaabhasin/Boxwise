@@ -44,5 +44,11 @@ export const CommandResult = z.discriminatedUnion("kind", [
     kind: z.literal("error"),
     text: z.string(),
   }),
+  /** Open the share sheet for this quotation (the screen's Send button does the sending). */
+  z.object({
+    kind: z.literal("share"),
+    quotationId: z.string(),
+    text: z.string(),
+  }),
 ]);
 export type CommandResult = z.infer<typeof CommandResult>;

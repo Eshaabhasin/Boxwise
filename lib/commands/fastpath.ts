@@ -4,7 +4,7 @@
  * inside a long sentence is not taken as approval.
  */
 
-export type FastCommand = "approve" | "cancel" | "undo";
+export type FastCommand = "approve" | "cancel" | "undo" | "send";
 
 const PHRASES: Record<FastCommand, readonly string[]> = {
   approve: [
@@ -16,6 +16,7 @@ const PHRASES: Record<FastCommand, readonly string[]> = {
     "cancel", "cancel it", "cancel karo", "cancel kar do", "rehne do", "rahne do", "chhodo", "chodo", "discard",
     "nahi chahiye", "mat karo", "drop it", "forget it", "no cancel",
   ],
+  send: ["send", "send it", "send karo", "send kar do", "bhej do", "bhejo", "bhej", "share", "share karo", "whatsapp karo", "whatsapp kar do", "whatsapp pe bhej do"],
   undo: ["undo", "undo karo", "undo kar do", "wapas karo", "wapas", "pehle jaisa karo", "pehle jaisa kar do", "revert"],
 };
 

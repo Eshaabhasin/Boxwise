@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { isValidObjectId } from "mongoose";
 import CardDetail from "@/components/CardDetail";
@@ -14,6 +15,16 @@ import { connectDb } from "@/lib/db";
 import { getField } from "@/lib/fields";
 import { Customer, Quotation, Request } from "@/lib/models";
 import { QUOTE_FIELDS, missingFor, whatsappMessage } from "@/lib/quote/build";
+import { pdfFileName, publicPdfUrl } from "@/lib/quote/share";
+
+/** Where the customer can open the PDF: PUBLIC_BASE_URL, or the address this page was opened on. */
+async function baseUrl(): Promise<string> {
+  if (process.env.PUBLIC_BASE_URL && !process.env.PUBLIC_BASE_URL.includes("localhost")) return process.env.PUBLIC_BASE_URL;
+  const h = await headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
+  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
+  return `${proto}://${host}`;
+}
 
 const ACTION_LABEL = { create: "Made", edit: "Changed", stage: "Moved", quote: "Approved", undo: "Undo" } as const;
 
@@ -81,6 +92,13 @@ export default async function QuotePage({ params }: PageProps<"/quote/[id]">) {
         line: [COMPANY.addressLines.join(", "), COMPANY.phone, COMPANY.gstin ? `GSTIN ${COMPANY.gstin}` : ""].filter(Boolean).join(" · "),
       },
       pdfUrl: `/api/quotations/${quote._id.toString()}/pdf`,
+      share: {
+        quotationId: quote._id.toString(),
+        fileName: pdfFileName(quote.number),
+        publicPdfUrl: publicPdfUrl(await baseUrl(), quote.shareToken),
+        phone: c.phone,
+        sentOn: quote.sentAt?.toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "Asia/Kolkata" }),
+      },
     };
   }
 

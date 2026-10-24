@@ -2,7 +2,7 @@ import { z } from "zod";
 import { BOARD_FILTERS } from "@/lib/board";
 import { STAGES } from "@/lib/fields";
 
-export const INTENTS = ["create_request", "edit_request", "set_rate", "search", "open", "set_stage", "other"] as const;
+export const INTENTS = ["create_request", "repeat_request", "edit_request", "set_rate", "search", "open", "set_stage", "other"] as const;
 export type Intent = (typeof INTENTS)[number];
 
 /** The only shape the LLM may return. Anything else is rejected and retried once. */

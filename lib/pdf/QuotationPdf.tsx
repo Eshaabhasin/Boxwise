@@ -232,7 +232,4 @@ export async function renderQuotationPdf(q: QuotationPdfData): Promise<Buffer> {
   return renderToBuffer(<QuotationDocument q={q} />);
 }
 
-/** "Quotation-BB-2026-27-0001.pdf" */
-export function pdfFileName(number: string | undefined): string {
-  return `Quotation-${(number ?? "draft").replace(/[^\w-]+/g, "-")}.pdf`;
-}
+export { pdfFileName } from "@/lib/quote/share";
