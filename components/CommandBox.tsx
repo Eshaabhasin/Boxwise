@@ -27,7 +27,7 @@ const TRY_ONE = [
 /** How each screen labels its slip. */
 const VARIANTS = {
   request: { slip: "Request slip", heading: "What did the customer ask for?", submit: "Make box card", rows: 4, examples: true },
-  rate: { slip: "Rate slip", heading: "Say the rate and terms", submit: "Send", rows: 3, examples: false },
+  rate: { slip: "Card slip", heading: "Say a change, or the rate", submit: "Send", rows: 3, examples: false },
   command: { slip: "Command slip", heading: "Say the next step", submit: "Send", rows: 3, examples: false },
 } as const;
 export type CommandVariant = keyof typeof VARIANTS;

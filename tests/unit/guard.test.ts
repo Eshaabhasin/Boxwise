@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { guardRequestFields } from "@/lib/nlp/guard";
 import { normalize } from "@/lib/nlp/normalize";
 import { FEW_SHOTS } from "@/lib/nlp/prompt";
-import { LlmRequestOutput } from "@/lib/nlp/schemas";
+import { LlmCommandOutput } from "@/lib/nlp/schemas";
 
 const SHARMA = normalize(
   "Sharma Packaging paanch sau box barah by das by aath inch paanch ply tees kilo load do colour print",
@@ -97,9 +97,9 @@ describe("customer fields", () => {
 });
 
 describe("prompt examples agree with the guard", () => {
-  it.each(FEW_SHOTS.map(([input, output]) => [input, output] as const))("%s", (input, output) => {
-    const parsed = LlmRequestOutput.parse(output);
-    if (parsed.intent !== "create_request") return;
+  it.each(FEW_SHOTS.map(([, input, output]) => [input, output] as const))("%s", (input, output) => {
+    const parsed = LlmCommandOutput.parse(output);
+    if (parsed.intent !== "create_request" && parsed.intent !== "edit_request") return;
     const text = input.replace(/^Earlier: /, "").replace(/\. Correction: /, " ");
     const g = guardRequestFields(parsed.fields, normalize(text));
     expect(g.dropped).toEqual([]);

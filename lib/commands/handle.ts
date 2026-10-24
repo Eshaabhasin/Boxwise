@@ -1,39 +1,38 @@
 import "server-only";
-import type { HydratedDocument } from "mongoose";
-import { CreateRequestOps, buildCreatePlan, companyKey, type ExistingCustomer } from "@/lib/commands/plan";
+import type { HydratedDocument, Types } from "mongoose";
+import { applyPlan } from "@/lib/commands/apply";
+import { entryAction } from "@/lib/commands/history";
+import { describeScreen, loadCard, resolveTarget, type LoadedCard } from "@/lib/commands/cards";
 import { fastCommand } from "@/lib/commands/fastpath";
+import {
+  PlanOps,
+  buildCreatePlan,
+  buildEditPlan,
+  buildStagePlan,
+  buildUndoPlan,
+  companyKey,
+  type ExistingCustomer,
+  type PlanView,
+} from "@/lib/commands/plan";
 import { BoxCardViewSchema, type CommandResult } from "@/lib/commands/types";
+import { isLengthUnit } from "@/lib/calc/units";
 import { connectDb } from "@/lib/db";
-import { CUSTOMER_FIELD_KEYS, missingFields, type FieldKey, type Specs } from "@/lib/fields";
-import { Customer, ParseLog, PendingPlan, Request, nextSeq, type PendingPlanDoc } from "@/lib/models";
+import { Customer, ParseLog, PendingPlan, Request, type PendingPlanDoc } from "@/lib/models";
+import { guardRequestFields } from "@/lib/nlp/guard";
 import { LlmConfigError, createLlm, llmEnvFromProcess } from "@/lib/nlp/llm";
-import { parseRequest } from "@/lib/nlp/parse";
+import { parseCommand, type ParseResult } from "@/lib/nlp/parse";
 
 /**
  * Runs one dictated command. Nothing is ever changed here except by "approve"
- * applying a plan the owner has already seen (golden rule 4).
- *
- * Phase 2 understands: a new request (-> plan), a spoken correction to the
- * waiting plan, approve, cancel. Edits, search, rate and undo come later.
+ * applying a plan the owner has already seen (golden rule 4). Search and open
+ * only read, so they run at once.
  */
 
 const PLAN_TTL_MS = 24 * 60 * 60 * 1000;
+type Plan = HydratedDocument<PendingPlanDoc>;
 
-function toExisting(doc: { company: string; contactPerson?: string; phone?: string; gstin?: string; address?: string } | null): ExistingCustomer | null {
-  if (!doc) return null;
-  return { company: doc.company, contactPerson: doc.contactPerson, phone: doc.phone, gstin: doc.gstin, address: doc.address };
-}
-
-async function latestPendingPlan() {
+async function latestPendingPlan(): Promise<Plan | null> {
   return PendingPlan.findOne({ status: "pending", expiresAt: { $gt: new Date() } }).sort({ createdAt: -1 });
-}
-
-/** The waiting plan, as the command box shows it (used when a screen loads). */
-export async function getPendingPlanResult(): Promise<CommandResult | null> {
-  await connectDb();
-  const plan = await latestPendingPlan();
-  if (!plan) return null;
-  return planResult(plan);
 }
 
 function planResult(plan: Pick<PendingPlanDoc, "_id" | "lines" | "ops">): CommandResult {
@@ -49,149 +48,103 @@ function planResult(plan: Pick<PendingPlanDoc, "_id" | "lines" | "ops">): Comman
   };
 }
 
-async function makeCreatePlan(text: string, earlier: HydratedDocument<PendingPlanDoc> | null): Promise<CommandResult> {
-  const llm = createLlm(llmEnvFromProcess());
-  const earlierOps = earlier ? CreateRequestOps.safeParse(earlier.ops) : null;
-  const earlierHeard = earlierOps?.success ? earlierOps.data.heard.join(" ") : undefined;
-  const parsed = await parseRequest(text, llm, earlierHeard);
+/** The waiting plan, as the command box shows it (used when a screen loads). */
+export async function getPendingPlanResult(): Promise<CommandResult | null> {
+  await connectDb();
+  const plan = await latestPendingPlan();
+  return plan ? planResult(plan) : null;
+}
 
-  const log = await ParseLog.create({
-    text,
-    normalized: parsed.normalized,
-    screen: "command",
-    provider: llm.provider,
-    model: llm.model,
-    llmRaw: parsed.llmRaw,
-    llmParsed: parsed.llmParsed,
-    dropped: parsed.request?.dropped.map((d) => `${d.field}=${d.value}: ${d.reason}`) ?? [],
-    outcome: parsed.error ? "error" : "pending",
-    error: parsed.error ?? undefined,
-    latencyMs: parsed.latencyMs,
-  });
-
-  if (parsed.error) {
-    return { kind: "error", text: `Couldn't read that: ${parsed.error} Try again.` };
-  }
-  if (parsed.intent !== "create_request" || !parsed.request) {
-    return {
-      kind: "message",
-      text: earlier
-        ? "That didn't sound like a correction. Say the change (“600 box”, “B flute”), or “approve” or “cancel”."
-        : "So far BoxBol makes new request cards. Searching, edits and rates come in the next phases.",
-    };
-  }
-
-  const guarded = parsed.request;
-  const company = guarded.customer.company;
-  const existingDoc = company ? await Customer.findOne({ companyKey: companyKey(company) }).lean() : null;
-  const view = buildCreatePlan(guarded, parsed.unclear, toExisting(existingDoc));
-
-  const prior = earlierOps?.success ? earlierOps.data : null;
-  const ops: CreateRequestOps = {
-    kind: "create_request",
-    customer: Object.fromEntries(Object.entries(guarded.customer).filter((e): e is [string, string] => typeof e[1] === "string")),
-    specs: Object.fromEntries(Object.entries(guarded.specs).filter(([, v]) => v !== undefined)) as CreateRequestOps["specs"],
-    heard: [...(prior?.heard ?? []), parsed.normalized],
-    rawTexts: [...(prior?.rawTexts ?? []), text],
-  };
-
-  if (earlier) {
-    earlier.status = "superseded";
-    await earlier.save();
-    if (earlier.parseLogId) {
-      await ParseLog.updateOne({ _id: earlier.parseLogId }, { outcome: "corrected", $push: { corrections: text } });
+async function savePlan(
+  action: string,
+  view: PlanView,
+  ops: PlanOps,
+  sourceText: string,
+  opts: { parseLogId?: Types.ObjectId; requestId?: Types.ObjectId; replaces?: Plan | null },
+): Promise<CommandResult> {
+  if (opts.replaces) {
+    opts.replaces.status = "superseded";
+    await opts.replaces.save();
+    if (opts.replaces.parseLogId) {
+      await ParseLog.updateOne({ _id: opts.replaces.parseLogId }, { outcome: "corrected", $push: { corrections: sourceText } });
     }
   }
-
   const plan = await PendingPlan.create({
-    action: "create_request",
+    action,
+    requestId: opts.requestId,
     lines: view.lines,
     ops: { ...ops, view: { title: view.title, warnings: view.warnings, card: view.card } },
-    sourceText: text,
-    parseLogId: log._id,
+    sourceText,
+    parseLogId: opts.parseLogId,
     status: "pending",
     expiresAt: new Date(Date.now() + PLAN_TTL_MS),
   });
-  await ParseLog.updateOne({ _id: log._id }, { planLines: view.lines });
+  if (opts.parseLogId) await ParseLog.updateOne({ _id: opts.parseLogId }, { planLines: view.lines });
   return planResult(plan);
 }
 
-async function applyCreate(plan: HydratedDocument<PendingPlanDoc>): Promise<CommandResult> {
-  const parsedOps = CreateRequestOps.safeParse(plan.ops);
-  if (!parsedOps.success) return { kind: "error", text: "That plan can't be applied (it was damaged). Dictate it again." };
-  const ops = parsedOps.data;
-  const company = ops.customer.company;
-  if (!company) {
-    return { kind: "error", text: "No company name yet. Say the customer's company name, then approve." };
-  }
+function toExisting(doc: { company: string; contactPerson?: string; phone?: string; gstin?: string; address?: string } | null): ExistingCustomer | null {
+  if (!doc) return null;
+  return { company: doc.company, contactPerson: doc.contactPerson, phone: doc.phone, gstin: doc.gstin, address: doc.address };
+}
 
-  const key = companyKey(company);
-  const customerSet: Record<string, string> = {};
-  for (const k of CUSTOMER_FIELD_KEYS) {
-    const v = ops.customer[k];
-    if (v && k !== "company") customerSet[k] = v;
-  }
-  const customer = await Customer.findOneAndUpdate(
-    { companyKey: key },
-    { $set: customerSet, $setOnInsert: { company, companyKey: key } },
-    { upsert: true, returnDocument: "after" },
-  );
-  if (!customer) return { kind: "error", text: "Couldn't save the customer. Try again." };
-
-  const specs: Specs = {};
-  for (const [k, v] of Object.entries(ops.specs)) specs[k as FieldKey] = v;
-  const known: Specs = {
-    ...specs,
-    company: customer.company,
-    contactPerson: customer.contactPerson,
-    phone: customer.phone,
-    gstin: customer.gstin,
-    address: customer.address,
-  };
-  const now = new Date();
-  const number = await nextSeq("request");
-  const request = await Request.create({
-    number,
-    customerId: customer._id,
-    customerName: customer.company,
-    customerKey: key,
-    stage: "New",
-    specs,
-    missing: missingFields(known, "card"),
-    rawTexts: ops.rawTexts.map((t) => ({ text: t, at: now })),
-    history: [
-      {
-        planId: plan._id,
-        summary: "Card made from dictation",
-        changes: Object.entries(specs).map(([field, after]) => ({ field: field as FieldKey, before: null, after: after ?? null })),
-        stageAfter: "New",
-        undone: false,
-        at: now,
-      },
-    ],
-  });
-
-  plan.status = "applied";
-  plan.requestId = request._id;
-  await plan.save();
-  if (plan.parseLogId) await ParseLog.updateOne({ _id: plan.parseLogId }, { outcome: "approved", requestId: request._id });
-
+/** The earlier utterances of the waiting plan, so a correction is read together with them. */
+function earlierOf(pending: Plan | null): { heard: string[]; rawTexts: string[]; requestId?: string } | null {
+  if (!pending) return null;
+  const ops = PlanOps.safeParse(pending.ops);
+  if (!ops.success || ops.data.kind === "undo") return null;
   return {
-    kind: "message",
-    text: `Saved REQ-${String(number).padStart(3, "0")} for ${customer.company}.`,
-    navigateTo: `/quote/${request._id.toString()}`,
+    heard: ops.data.heard,
+    rawTexts: ops.data.rawTexts,
+    requestId: ops.data.kind === "create_request" ? undefined : ops.data.requestId,
   };
 }
 
-export async function handleCommand(text: string): Promise<CommandResult> {
+async function makeUndoPlan(path: string, text: string): Promise<CommandResult> {
+  const { card: onScreen } = await describeScreen(path);
+  // On a card: undo that card's last change. Elsewhere: the last change anywhere.
+  const candidates = onScreen
+    ? [onScreen.request]
+    : await Request.find({ deletedAt: null, "history.undone": false }).sort({ updatedAt: -1 }).limit(20);
+  let best: { requestId: string; index: number; at: number } | null = null;
+  for (const r of candidates) {
+    r.history.forEach((h, index) => {
+      if (h.undone || entryAction(h, index) === "undo") return;
+      const at = new Date(h.at).getTime();
+      if (!best || at > best.at) best = { requestId: r._id.toString(), index, at };
+    });
+  }
+  if (!best) return { kind: "message", text: "There is nothing to undo." };
+  const { requestId, index } = best as { requestId: string; index: number };
+  const card = await loadCard(requestId);
+  const entry = card?.request.history[index];
+  if (!card || !entry) return { kind: "message", text: "There is nothing to undo." };
+  const action = entryAction(entry, index);
+  if (action === "undo") return { kind: "message", text: "There is nothing to undo." };
+  const view = buildUndoPlan(card.state, {
+    action,
+    summary: entry.summary,
+    changes: entry.changes,
+    stageBefore: entry.stageBefore,
+    stageAfter: entry.stageAfter,
+  });
+  return savePlan("undo", view, { kind: "undo", requestId, planId: entry.planId.toString() }, text, {
+    requestId: card.request._id,
+  });
+}
+
+function parseError(parsed: ParseResult): CommandResult {
+  return { kind: "error", text: `Couldn't read that: ${parsed.error} Try again.` };
+}
+
+export async function handleCommand(text: string, path: string): Promise<CommandResult> {
   await connectDb();
   const pending = await latestPendingPlan();
   const fast = fastCommand(text);
 
   if (fast === "approve") {
     if (!pending) return { kind: "message", text: "Nothing is waiting for approval." };
-    if (pending.action === "create_request") return applyCreate(pending);
-    return { kind: "error", text: "That kind of plan can't be applied yet." };
+    return applyPlan(pending);
   }
   if (fast === "cancel") {
     if (!pending) return { kind: "message", text: "Nothing to cancel." };
@@ -201,13 +154,130 @@ export async function handleCommand(text: string): Promise<CommandResult> {
     return { kind: "message", text: "Dropped. Nothing was saved." };
   }
   if (fast === "undo") {
-    return { kind: "message", text: "Undo comes in phase 3, with voice edits." };
+    if (pending) return { kind: "message", text: "A plan is waiting. Say “approve” or “cancel” for it first, then “undo”." };
+    return makeUndoPlan(path, text);
   }
 
+  let llm;
   try {
-    return await makeCreatePlan(text, pending && pending.action === "create_request" ? pending : null);
+    llm = createLlm(llmEnvFromProcess());
   } catch (err) {
     if (err instanceof LlmConfigError) return { kind: "error", text: err.message };
     throw err;
+  }
+
+  const { screen, card: onScreen } = await describeScreen(path);
+  const earlier = earlierOf(pending);
+  const earlierCard = earlier?.requestId ? await loadCard(earlier.requestId) : null;
+  const unitCard = earlierCard ?? onScreen;
+  const parsed = await parseCommand(text, llm, {
+    screen,
+    earlier: earlier?.heard.join(" "),
+    defaultUnit: isLengthUnit(unitCard?.state.specs.dimUnit) ? unitCard.state.specs.dimUnit : undefined,
+  });
+
+  const log = await ParseLog.create({
+    text,
+    normalized: parsed.normalized,
+    screen,
+    requestId: onScreen?.request._id,
+    provider: llm.provider,
+    model: llm.model,
+    llmRaw: parsed.llmRaw,
+    llmParsed: parsed.command,
+    dropped: parsed.request?.dropped.map((d) => `${d.field}=${d.value}: ${d.reason}`) ?? [],
+    outcome: parsed.error ? "error" : "pending",
+    error: parsed.error ?? undefined,
+    latencyMs: parsed.latencyMs,
+  });
+  if (parsed.error || !parsed.command) return parseError(parsed);
+  const cmd = parsed.command;
+  const stillWaiting = pending ? " A plan is still waiting for “approve” or “cancel”." : "";
+  const heard = [...(earlier?.heard ?? []), parsed.normalized];
+  const rawTexts = [...(earlier?.rawTexts ?? []), text];
+
+  switch (cmd.intent) {
+    case "search": {
+      await ParseLog.updateOne({ _id: log._id }, { outcome: "approved" });
+      const params = new URLSearchParams();
+      params.set("filter", cmd.filter ?? (cmd.query ? "All" : "Pending"));
+      if (cmd.query) params.set("q", cmd.query);
+      const what = [cmd.filter ? `${cmd.filter.toLowerCase()} cards` : "cards", cmd.query ? `matching “${cmd.query}”` : ""].join(" ").trim();
+      return { kind: "message", text: `Showing ${what}.${stillWaiting}`, navigateTo: `/board?${params.toString()}` };
+    }
+
+    case "open": {
+      const found = await resolveTarget(cmd.target, null);
+      if ("error" in found) return { kind: "message", text: found.error + stillWaiting };
+      await ParseLog.updateOne({ _id: log._id }, { outcome: "approved", requestId: found.card.request._id });
+      return {
+        kind: "message",
+        text: `${found.note ? `${found.note} ` : ""}Opened ${found.card.state.ref} ${found.card.request.customerName}.${stillWaiting}`,
+        navigateTo: `/quote/${found.card.request._id.toString()}`,
+      };
+    }
+
+    case "create_request": {
+      if (!parsed.request) return { kind: "message", text: "Didn't catch a box request in that." };
+      const guarded = parsed.request;
+      const company = guarded.customer.company;
+      const existing = company ? await Customer.findOne({ companyKey: companyKey(company) }).lean() : null;
+      const view = buildCreatePlan(guarded, parsed.unclear, toExisting(existing));
+      const ops: PlanOps = {
+        kind: "create_request",
+        customer: Object.fromEntries(Object.entries(guarded.customer).filter((e): e is [string, string] => typeof e[1] === "string")),
+        specs: Object.fromEntries(Object.entries(guarded.specs).filter(([, v]) => v !== undefined)) as Record<string, string | number | null>,
+        heard,
+        rawTexts,
+      };
+      return savePlan("create_request", view, ops, text, { parseLogId: log._id, replaces: pending });
+    }
+
+    case "edit_request":
+    case "set_stage": {
+      // A correction keeps working on the same card unless a different one is named.
+      const base: LoadedCard | null = cmd.target ? null : (earlierCard ?? onScreen);
+      const found = await resolveTarget(cmd.target, base);
+      if ("error" in found) return { kind: "message", text: found.error + stillWaiting };
+      const card = found.card;
+      const notes = found.note ? [found.note] : [];
+
+      if (cmd.intent === "set_stage") {
+        if (!cmd.stage) return { kind: "message", text: "Won, lost or new? Say which." };
+        const view = buildStagePlan(card.state, cmd.stage);
+        view.warnings.unshift(...notes);
+        return savePlan("set_stage", view, { kind: "set_stage", requestId: card.request._id.toString(), stage: cmd.stage, heard, rawTexts }, text, {
+          parseLogId: log._id,
+          requestId: card.request._id,
+          replaces: pending,
+        });
+      }
+
+      // Re-check the fields with this card's own unit (the target may not be the card on screen).
+      const unit = isLengthUnit(card.state.specs.dimUnit) ? card.state.specs.dimUnit : undefined;
+      const guarded = guardRequestFields(cmd.fields, parsed.heardText, { defaultUnit: unit });
+      const view = buildEditPlan(card.state, guarded, parsed.unclear);
+      view.warnings.unshift(...notes);
+      if (Object.keys(view.set).length === 0) {
+        await ParseLog.updateOne({ _id: log._id }, { outcome: "cancelled" });
+        const why = view.warnings.length ? ` ${view.warnings.join(" ")}` : "";
+        return { kind: "message", text: `Nothing to change on ${card.state.ref}.${why}` };
+      }
+      const ops: PlanOps = {
+        kind: "edit_request",
+        requestId: card.request._id.toString(),
+        set: view.set as Record<string, string | number | null>,
+        heard,
+        rawTexts,
+      };
+      return savePlan("edit_request", view, ops, text, { parseLogId: log._id, requestId: card.request._id, replaces: pending });
+    }
+
+    default:
+      await ParseLog.updateOne({ _id: log._id }, { outcome: "cancelled" });
+      return {
+        kind: "message",
+        text: `Didn't understand that as a command. You can dictate a new request, a change (“height 9 inch kar do”), a search (“Sharma dhundo”), “REQ 2 kholo”, “order mil gaya”, or “undo”.${stillWaiting}`,
+      };
   }
 }

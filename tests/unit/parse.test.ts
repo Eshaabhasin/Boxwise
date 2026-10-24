@@ -27,7 +27,9 @@ describe("parse pipeline", () => {
   it("sends normalized text and returns guarded storage values", async () => {
     const llm = fakeLlm(GOOD);
     const r = await parseRequest(SAID, llm);
-    expect(llm.calls[0]?.at(-1)?.content).toBe("Sharma Packaging 500 box 12 by 10 by 8 inch 5 ply 30 kilo load 2 colour print");
+    expect(llm.calls[0]?.at(-1)?.content).toBe(
+      "Screen: new quote\nSaid: Sharma Packaging 500 box 12 by 10 by 8 inch 5 ply 30 kilo load 2 colour print",
+    );
     expect(r.error).toBeNull();
     expect(r.request?.specs.length).toBe(304.8);
     expect(r.request?.dropped).toEqual([]);
@@ -61,7 +63,7 @@ describe("parse pipeline", () => {
     const llm = fakeLlm(corrected);
     const earlier = "Sharma Packaging 500 box 12 by 10 by 8 inch 5 ply 30 kilo load 2 colour print";
     const r = await parseRequest("nahi chhe sau box aur B flute", llm, earlier);
-    expect(llm.calls[0]?.at(-1)?.content).toBe(`Earlier: ${earlier}. Correction: nahi 600 box aur B flute`);
+    expect(llm.calls[0]?.at(-1)?.content).toBe(`Screen: new quote\nSaid: Earlier: ${earlier}. Correction: nahi 600 box aur B flute`);
     expect(r.request?.specs.quantity).toBe(600);
     expect(r.request?.specs.flute).toBe("B");
   });

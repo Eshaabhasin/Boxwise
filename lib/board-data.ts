@@ -8,8 +8,10 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Cards removed by "undo" stay in the database but never show. */
 function companyFilter(q: string) {
-  return q ? { customerName: { $regex: escapeRegex(q), $options: "i" } } : {};
+  const live = { deletedAt: null };
+  return q ? { ...live, customerName: { $regex: escapeRegex(q), $options: "i" } } : live;
 }
 
 export async function getStageCounts(q = ""): Promise<Record<Stage, number>> {

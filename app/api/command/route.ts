@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     return NextResponse.json(result, { status: 400 });
   }
   try {
-    return NextResponse.json(await handleCommand(parsed.data.text));
+    return NextResponse.json(await handleCommand(parsed.data.text, parsed.data.path));
   } catch (err) {
     console.error("command failed", err);
     const result: CommandResult = { kind: "error", text: message(err) };

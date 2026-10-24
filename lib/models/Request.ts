@@ -10,7 +10,11 @@ export interface FieldChange {
 /** One applied plan. Undo reverses the latest entry that is not already undone. */
 export interface HistoryEntry {
   planId: Types.ObjectId;
+  /** create = card made, edit = fields changed, stage = moved, undo = an undo (never undone itself). */
+  action?: "create" | "edit" | "stage" | "undo";
   summary: string;
+  /** The dictated texts this change added to rawTexts; undo takes them off again. */
+  texts?: string[];
   changes: FieldChange[];
   stageBefore?: Stage;
   stageAfter?: Stage;
@@ -33,6 +37,8 @@ export interface RequestDoc {
   /** Every dictated text that created or changed this card, oldest first. */
   rawTexts: { text: string; at: Date }[];
   history: HistoryEntry[];
+  /** Set when "undo" removes a card that was just made. Removed cards are hidden, not erased. */
+  deletedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -51,6 +57,9 @@ const RequestSchema = new Schema<RequestDoc>(
       type: [
         {
           planId: Schema.Types.ObjectId,
+          // No default: entries from before phase 3 have none, and entryAction() works them out.
+          action: { type: String, enum: ["create", "edit", "stage", "undo"] },
+          texts: { type: [String], default: undefined },
           summary: String,
           changes: [{ field: String, before: Schema.Types.Mixed, after: Schema.Types.Mixed, _id: false }],
           stageBefore: String,
@@ -62,6 +71,7 @@ const RequestSchema = new Schema<RequestDoc>(
       ],
       default: [],
     },
+    deletedAt: { type: Date, default: null },
   },
   { timestamps: true, minimize: false },
 );

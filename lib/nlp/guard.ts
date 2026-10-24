@@ -1,4 +1,4 @@
-import { toMm, isLengthUnit } from "@/lib/calc/units";
+import { toMm, isLengthUnit, type LengthUnit } from "@/lib/calc/units";
 import { getField, type FieldDef, type FieldKey, type SpecValue } from "@/lib/fields";
 import { numbersIn } from "@/lib/nlp/normalize";
 
@@ -72,8 +72,13 @@ function matchOption(field: FieldDef, raw: string, text: string): string | { rea
 /**
  * @param fields  the LLM's "fields" object
  * @param text    the normalized dictated text (all utterances for a corrected plan)
+ * @param opts.defaultUnit  unit for sides said without one (an edit uses the card's unit)
  */
-export function guardRequestFields(fields: Record<string, unknown>, text: string): GuardedRequest {
+export function guardRequestFields(
+  fields: Record<string, unknown>,
+  text: string,
+  opts: { defaultUnit?: LengthUnit } = {},
+): GuardedRequest {
   const out: GuardedRequest = { customer: {}, specs: {}, sizeWithoutUnit: null, dropped: [] };
   const drop = (field: string, value: unknown, reason: string) =>
     out.dropped.push({ field, value: show(value), reason });
@@ -153,8 +158,8 @@ export function guardRequestFields(fields: Record<string, unknown>, text: string
     }
   }
 
-  // Code converts the size to millimetres, using the unit he said.
-  const unit = out.specs.dimUnit;
+  // Code converts the size to millimetres, using the unit he said (or the card's unit for an edit).
+  const unit = isLengthUnit(out.specs.dimUnit) ? out.specs.dimUnit : opts.defaultUnit;
   const sides = Object.keys(spokenSides).length > 0;
   if (sides && isLengthUnit(unit)) {
     for (const [side, n] of Object.entries(spokenSides)) out.specs[side as FieldKey] = toMm(n, unit);
