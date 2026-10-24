@@ -99,9 +99,26 @@ describe("customer fields", () => {
 describe("prompt examples agree with the guard", () => {
   it.each(FEW_SHOTS.map(([, input, output]) => [input, output] as const))("%s", (input, output) => {
     const parsed = LlmCommandOutput.parse(output);
-    if (parsed.intent !== "create_request" && parsed.intent !== "edit_request") return;
+    if (!["create_request", "edit_request", "set_rate"].includes(parsed.intent)) return;
     const text = input.replace(/^Earlier: /, "").replace(/\. Correction: /, " ");
-    const g = guardRequestFields(parsed.fields, normalize(text));
+    const g = guardRequestFields(parsed.fields, normalize(text), { allowRate: parsed.intent === "set_rate" });
     expect(g.dropped).toEqual([]);
+  });
+});
+
+describe("the owner's rate (set_rate only)", () => {
+  it("stores a spoken rate in paise", () => {
+    expect(guardRequestFields({ ratePerBox: 18 }, normalize("rate 18 rupees per box"), { allowRate: true }).specs.ratePerBox).toBe(1800);
+    expect(guardRequestFields({ ratePerBox: 12.5 }, normalize("saade barah rupaye"), { allowRate: true }).specs.ratePerBox).toBe(1250);
+  });
+
+  it("accepts '9 rupees 50 paise' as 9.5", () => {
+    expect(guardRequestFields({ ratePerBox: 9.5 }, normalize("rate 9 rupees 50 paise"), { allowRate: true }).specs.ratePerBox).toBe(950);
+  });
+
+  it("never takes a rate that was not said, even in set_rate", () => {
+    const g = guardRequestFields({ ratePerBox: 20 }, normalize("rate 18 rupees"), { allowRate: true });
+    expect(g.specs.ratePerBox).toBeUndefined();
+    expect(g.dropped[0]?.reason).toMatch(/not in what you said/);
   });
 });

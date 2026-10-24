@@ -7,13 +7,17 @@ import {
   requestRef,
   type CreateRequestOps,
   type EditRequestOps,
+  type ApproveQuoteOps,
   type SetStageOps,
   type UndoOps,
 } from "@/lib/commands/plan";
 import { CREATED_SUMMARY, entryAction, removeTexts } from "@/lib/commands/history";
 import type { CommandResult } from "@/lib/commands/types";
+import { COMPANY } from "@/lib/company";
 import { CUSTOMER_FIELD_KEYS, type FieldKey, type SpecValue, type Specs } from "@/lib/fields";
-import { Customer, ParseLog, Request, nextSeq, type CustomerDoc, type FieldChange, type HistoryEntry, type PendingPlanDoc } from "@/lib/models";
+import { financialYear, quoteNumber } from "@/lib/quote/build";
+import { describeMissing, hasDraft, offerApproval, refreshDraft } from "@/lib/quote/drafts";
+import { Customer, ParseLog, Quotation, Request, nextSeq, type CustomerDoc, type FieldChange, type HistoryEntry, type PendingPlanDoc } from "@/lib/models";
 
 /**
  * Applying a plan the owner approved. Every change is written to the card's
@@ -122,7 +126,54 @@ async function applyEdit(plan: Plan, ops: EditRequestOps): Promise<CommandResult
   if (customer) await customer.save();
   await request.save();
   await markApplied(plan, request._id);
-  return { kind: "message", text: `Updated ${state.ref} ${request.customerName}.` };
+
+  // The rate, or any change to a card that already has a draft, rebuilds the draft quotation.
+  if (!ops.quote && !(await hasDraft(request._id))) {
+    return { kind: "message", text: `Updated ${state.ref} ${request.customerName}.` };
+  }
+  const draft = await refreshDraft(request, customer);
+  if (!draft.draft) {
+    return { kind: "message", text: `Saved. For the quotation, still say: ${describeMissing(draft.missingForDraft)}.` };
+  }
+  if (draft.missingForApproval.length > 0) {
+    return { kind: "message", text: `Draft quotation ready. Before approving it, still say: ${describeMissing(draft.missingForApproval)}.` };
+  }
+  return { kind: "message", text: "Draft quotation ready. Read it, then say “approve”." };
+}
+
+async function applyApproveQuote(plan: Plan, ops: ApproveQuoteOps): Promise<CommandResult> {
+  const card = await loadCard(ops.requestId);
+  if (!card) return { kind: "error", text: "That card no longer exists." };
+  const { request, state } = card;
+  const quote = await Quotation.findById(ops.quotationId);
+  if (!quote || quote.status !== "Draft" || !quote.requestId.equals(request._id)) {
+    return { kind: "error", text: "That draft has changed since. Read the new one, then say “approve”." };
+  }
+  const now = new Date();
+  if (!quote.number) {
+    const fy = financialYear(now);
+    quote.number = quoteNumber(COMPANY.quotePrefix, fy, await nextSeq(`quotation:${fy}`));
+  }
+  quote.status = "Approved";
+  quote.approvedAt = now;
+  await quote.save();
+
+  const before = request.stage;
+  request.stage = "Quoted";
+  request.history.push({
+    planId: plan._id,
+    action: "quote",
+    quotationId: quote._id,
+    summary: `Approved ${quote.number}`,
+    changes: [],
+    stageBefore: before,
+    stageAfter: "Quoted",
+    undone: false,
+    at: now,
+  });
+  await request.save();
+  await markApplied(plan, request._id);
+  return { kind: "message", text: `Quotation ${quote.number} for ${state.ref} ${request.customerName} is approved and ready to send.` };
 }
 
 async function applyStage(plan: Plan, ops: SetStageOps): Promise<CommandResult> {
@@ -163,11 +214,26 @@ async function applyUndo(plan: Plan, ops: UndoOps): Promise<CommandResult> {
     request.deletedAt = now;
   } else if (action === "stage") {
     request.stage = entry.stageBefore ?? "New";
+  } else if (action === "quote") {
+    // Back to draft (it keeps its number) and ask for approval again.
+    request.stage = entry.stageBefore ?? "New";
+    const quote = entry.quotationId ? await Quotation.findById(entry.quotationId) : null;
+    if (quote && quote.status !== "Draft") {
+      await Quotation.deleteMany({ requestId: request._id, status: "Draft" });
+      quote.status = "Draft";
+      quote.approvedAt = undefined;
+      await quote.save();
+      await offerApproval(request, quote);
+    }
   } else {
     const restore: Partial<Record<FieldKey, SpecValue>> = {};
     for (const c of entry.changes) restore[c.field] = c.before ?? null;
     writeValues(request, customer, restore, state.specs);
     request.missing = cardMissing(mergedSpecs(request, customer));
+    if (await hasDraft(request._id)) {
+      await request.save();
+      await refreshDraft(request, customer);
+    }
   }
   entry.undone = true;
   if (entry.texts?.length) request.rawTexts = removeTexts(request.rawTexts, entry.texts);
@@ -205,5 +271,7 @@ export async function applyPlan(plan: Plan): Promise<CommandResult> {
       return applyStage(plan, ops);
     case "undo":
       return applyUndo(plan, ops);
+    case "approve_quote":
+      return applyApproveQuote(plan, ops);
   }
 }

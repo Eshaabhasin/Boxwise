@@ -2,7 +2,10 @@ import { z } from "zod";
 import { buildCardView, type BoxCardView } from "@/lib/board";
 import { formatSize, isLengthUnit, fromMm } from "@/lib/calc/units";
 import { FIELD_DEFS, STAGES, missingFields, getField, type FieldKey, type SpecValue, type Specs, type Stage } from "@/lib/fields";
+import { formatINR } from "@/lib/calc/money";
+import { COMPANY } from "@/lib/company";
 import type { GuardedRequest } from "@/lib/nlp/guard";
+import { DRAFT_FIELDS, QUOTE_FIELDS, buildQuoteSnapshot, missingFor } from "@/lib/quote/build";
 
 /** What a "create request" plan will do when approved. Stored on the pending plan and checked again before applying. */
 export const CreateRequestOps = z.object({
@@ -23,6 +26,8 @@ export const EditRequestOps = z.object({
   kind: z.literal("edit_request"),
   requestId: z.string(),
   set: z.record(z.string(), SpecValueSchema),
+  /** The owner's rate/terms: after applying, build the draft quotation. */
+  quote: z.boolean().default(false),
   heard: z.array(z.string()),
   rawTexts: z.array(z.string()),
 });
@@ -46,7 +51,15 @@ export const UndoOps = z.object({
 });
 export type UndoOps = z.infer<typeof UndoOps>;
 
-export const PlanOps = z.discriminatedUnion("kind", [CreateRequestOps, EditRequestOps, SetStageOps, UndoOps]);
+/** Approve a draft quotation: give it its number and move the card to Quoted. */
+export const ApproveQuoteOps = z.object({
+  kind: z.literal("approve_quote"),
+  requestId: z.string(),
+  quotationId: z.string(),
+});
+export type ApproveQuoteOps = z.infer<typeof ApproveQuoteOps>;
+
+export const PlanOps = z.discriminatedUnion("kind", [CreateRequestOps, EditRequestOps, SetStageOps, UndoOps, ApproveQuoteOps]);
 export type PlanOps = z.infer<typeof PlanOps>;
 
 /** "Sharma Packaging" -> "sharma packaging"; used to match a customer said twice. */
@@ -81,6 +94,7 @@ export function display(key: FieldKey, value: SpecValue | undefined, specs: Spec
   if (key === "loadKg") return `${value} kg`;
   if (key === "quantity" && typeof value === "number") return value.toLocaleString("en-IN");
   if (key === "gstPercent") return `${value}%`;
+  if (f?.kind === "money" && typeof value === "number") return formatINR(value);
   return String(value);
 }
 
@@ -252,8 +266,42 @@ export function buildStagePlan(card: CardState, stage: Stage): PlanView {
   };
 }
 
+/**
+ * The owner's rate and terms: the edit lines, then the totals worked out by
+ * code, then what is still needed before the quotation can be approved.
+ */
+export function buildRatePlan(
+  card: CardState,
+  guarded: GuardedRequest,
+  unclear: readonly string[],
+): PlanView & { set: Partial<Record<FieldKey, SpecValue>> } {
+  const plan = buildEditPlan(card, guarded, unclear);
+  plan.title = `Rate for ${card.ref} ${String(card.specs.company ?? "")}`.trim();
+  const after: Specs = { ...card.specs, ...plan.set };
+  const needDraft = missingFor(after, DRAFT_FIELDS);
+  if (needDraft.length === 0) {
+    const q = buildQuoteSnapshot(after, COMPANY.stateCode);
+    const t = q.totals;
+    plan.lines.push(`Subtotal, ${q.quantity.toLocaleString("en-IN")} × ${formatINR(q.ratePaise)}: ${formatINR(t.subtotalPaise)}`);
+    if (q.gstMode === "intra") {
+      plan.lines.push(`CGST ${q.gstPercent / 2}% + SGST ${q.gstPercent / 2}%: ${formatINR(t.gstPaise)}`);
+    } else {
+      plan.lines.push(`IGST ${q.gstPercent}%: ${formatINR(t.gstPaise)}`);
+    }
+    if (t.roundOffPaise !== 0) plan.lines.push(`Round off: ${formatINR(t.roundOffPaise)}`);
+    plan.lines.push(`Total: ${formatINR(t.totalPaise)}`);
+  } else {
+    plan.warnings.push(`For the totals, still say: ${needDraft.map((k) => getField(k)?.label ?? k).join(", ")}.`);
+  }
+  const needQuote = missingFor(after, QUOTE_FIELDS).filter((k) => !needDraft.includes(k));
+  if (needQuote.length > 0) {
+    plan.lines.push(`Still needed before approval: ${needQuote.map((k) => getField(k)?.label ?? k).join(", ")}`);
+  }
+  return plan;
+}
+
 export interface UndoEntry {
-  action: "create" | "edit" | "stage";
+  action: "create" | "edit" | "stage" | "quote";
   summary: string;
   changes: { field: FieldKey; before: SpecValue; after: SpecValue }[];
   stageBefore?: Stage;
@@ -269,6 +317,14 @@ export function buildUndoPlan(card: CardState, entry: UndoEntry): PlanView {
       lines: [`Remove card ${card.ref} ${String(card.specs.company ?? "")} (it was just made)`],
       warnings: [],
       card: viewAfter(card, card.specs, card.stage),
+    };
+  }
+  if (entry.action === "quote") {
+    return {
+      title,
+      lines: [`Take back approval: ${entry.summary.replace(/^Approved /, "")} goes back to draft`, `Stage: ${entry.stageAfter ?? card.stage} → ${entry.stageBefore ?? "New"}`],
+      warnings: [],
+      card: viewAfter(card, card.specs, entry.stageBefore ?? "New"),
     };
   }
   if (entry.action === "stage") {

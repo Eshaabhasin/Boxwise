@@ -14,6 +14,8 @@ import { LlmCommandOutput, type Intent } from "@/lib/nlp/schemas";
 export interface ParseOptions {
   /** Where it was said, e.g. "new quote", "board", "card REQ-001 Sharma Packaging". */
   screen?: Screen;
+  /** Company of the card on screen: a target naming it is the same as no target. */
+  screenCompany?: string;
   /** Normalized text of the plan being corrected, if any. */
   earlier?: string;
   /** Unit to use for a size side said without one (the card's own unit, for edits). */
@@ -94,12 +96,17 @@ export async function parseCommand(text: string, llm: LlmClient, opts: ParseOpti
 
   const unclear = [...(command?.unclear ?? [])];
   if (command?.target && !targetWasSaid(command.target, heardText)) {
-    unclear.push(`ignored card name “${command.target}”, it was not in what you said`);
+    // The model often names the card on screen; that is what no target means anyway, so no warning.
+    const sameAsScreen = opts.screenCompany && wordsOf(command.target).join(" ") === wordsOf(opts.screenCompany).join(" ");
+    if (!sameAsScreen) unclear.push(`ignored card name “${command.target}”, it was not in what you said`);
     command = { ...command, target: null };
   }
 
-  const hasFields = command && (command.intent === "create_request" || command.intent === "edit_request");
-  const request = hasFields && command ? guardRequestFields(command.fields, heardText, { defaultUnit: opts.defaultUnit }) : null;
+  const hasFields = command && ["create_request", "edit_request", "set_rate"].includes(command.intent);
+  const request =
+    hasFields && command
+      ? guardRequestFields(command.fields, heardText, { defaultUnit: opts.defaultUnit, allowRate: command.intent === "set_rate" })
+      : null;
   return {
     normalized,
     heardText,

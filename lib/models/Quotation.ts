@@ -38,6 +38,8 @@ export interface QuotationDoc {
     paymentTerms: string;
     validity: string;
   };
+  itemTitle: string;
+  itemDetail: string;
   status: QuotationStatus;
   /** Random token for the public PDF link used by the WhatsApp text fallback. */
   shareToken: string;
@@ -75,6 +77,8 @@ const QuotationSchema = new Schema<QuotationDoc>(
       paymentTerms: { type: String, required: true },
       validity: { type: String, required: true },
     },
+    itemTitle: { type: String, required: true },
+    itemDetail: { type: String, default: "" },
     status: { type: String, enum: QUOTATION_STATUSES, default: "Draft", index: true },
     shareToken: { type: String, required: true, unique: true },
     approvedAt: Date,

@@ -127,3 +127,17 @@ describe("command parsing", () => {
     expect(r.request).toBeNull();
   });
 });
+
+describe("phase 4 regressions", () => {
+  it("shows the rate in rupees, not paise", async () => {
+    const { display } = await import("@/lib/commands/plan");
+    expect(display("ratePerBox", 1800, {})).toBe("₹18.00");
+  });
+
+  it("does not warn when the model names the card on screen", async () => {
+    const llm: LlmClient = { provider: "fake", model: "fake", complete: async () => JSON.stringify({ intent: "set_rate", target: "BoxBol Test Co", fields: { ratePerBox: 18 } }) };
+    const r = await parseCommand("rate 18 rupaye", llm, { screen: "card REQ-004 BoxBol Test Co", screenCompany: "BoxBol Test Co" });
+    expect(r.command?.target).toBeNull();
+    expect(r.unclear).toEqual([]);
+  });
+});

@@ -8,6 +8,7 @@ import {
   PlanOps,
   buildCreatePlan,
   buildEditPlan,
+  buildRatePlan,
   buildStagePlan,
   buildUndoPlan,
   companyKey,
@@ -17,7 +18,9 @@ import {
 import { BoxCardViewSchema, type CommandResult } from "@/lib/commands/types";
 import { isLengthUnit } from "@/lib/calc/units";
 import { connectDb } from "@/lib/db";
-import { Customer, ParseLog, PendingPlan, Request, type PendingPlanDoc } from "@/lib/models";
+import { Customer, ParseLog, PendingPlan, Quotation, Request, type PendingPlanDoc } from "@/lib/models";
+import { QUOTE_FIELDS, missingFor } from "@/lib/quote/build";
+import { offerApproval } from "@/lib/quote/drafts";
 import { guardRequestFields } from "@/lib/nlp/guard";
 import { LlmConfigError, createLlm, llmEnvFromProcess } from "@/lib/nlp/llm";
 import { parseCommand, type ParseResult } from "@/lib/nlp/parse";
@@ -93,6 +96,8 @@ function earlierOf(pending: Plan | null): { heard: string[]; rawTexts: string[];
   if (!pending) return null;
   const ops = PlanOps.safeParse(pending.ops);
   if (!ops.success || ops.data.kind === "undo") return null;
+  // A waiting "approve quotation" is not something to correct, but later commands still mean that card.
+  if (ops.data.kind === "approve_quote") return { heard: [], rawTexts: [], requestId: ops.data.requestId };
   return {
     heard: ops.data.heard,
     rawTexts: ops.data.rawTexts,
@@ -143,8 +148,16 @@ export async function handleCommand(text: string, path: string): Promise<Command
   const fast = fastCommand(text);
 
   if (fast === "approve") {
-    if (!pending) return { kind: "message", text: "Nothing is waiting for approval." };
-    return applyPlan(pending);
+    if (pending) return applyPlan(pending);
+    // "approve" on a card whose draft quotation is complete, after an earlier "cancel".
+    const { card } = await describeScreen(path);
+    const draft = card ? await Quotation.findOne({ requestId: card.request._id, status: "Draft" }) : null;
+    if (card && draft && missingFor(card.state.specs, QUOTE_FIELDS).length === 0) {
+      await offerApproval(card.request, draft);
+      const offered = await latestPendingPlan();
+      if (offered) return applyPlan(offered);
+    }
+    return { kind: "message", text: "Nothing is waiting for approval." };
   }
   if (fast === "cancel") {
     if (!pending) return { kind: "message", text: "Nothing to cancel." };
@@ -154,7 +167,7 @@ export async function handleCommand(text: string, path: string): Promise<Command
     return { kind: "message", text: "Dropped. Nothing was saved." };
   }
   if (fast === "undo") {
-    if (pending) return { kind: "message", text: "A plan is waiting. Say “approve” or “cancel” for it first, then “undo”." };
+    if (pending && pending.action !== "approve_quote") return { kind: "message", text: "A plan is waiting. Say “approve” or “cancel” for it first, then “undo”." };
     return makeUndoPlan(path, text);
   }
 
@@ -172,6 +185,7 @@ export async function handleCommand(text: string, path: string): Promise<Command
   const unitCard = earlierCard ?? onScreen;
   const parsed = await parseCommand(text, llm, {
     screen,
+    screenCompany: onScreen?.request.customerName,
     earlier: earlier?.heard.join(" "),
     defaultUnit: isLengthUnit(unitCard?.state.specs.dimUnit) ? unitCard.state.specs.dimUnit : undefined,
   });
@@ -234,6 +248,7 @@ export async function handleCommand(text: string, path: string): Promise<Command
     }
 
     case "edit_request":
+    case "set_rate":
     case "set_stage": {
       // A correction keeps working on the same card unless a different one is named.
       const base: LoadedCard | null = cmd.target ? null : (earlierCard ?? onScreen);
@@ -254,9 +269,11 @@ export async function handleCommand(text: string, path: string): Promise<Command
       }
 
       // Re-check the fields with this card's own unit (the target may not be the card on screen).
+      // Only the owner's own "set rate" command may carry a rate.
+      const isRate = cmd.intent === "set_rate";
       const unit = isLengthUnit(card.state.specs.dimUnit) ? card.state.specs.dimUnit : undefined;
-      const guarded = guardRequestFields(cmd.fields, parsed.heardText, { defaultUnit: unit });
-      const view = buildEditPlan(card.state, guarded, parsed.unclear);
+      const guarded = guardRequestFields(cmd.fields, parsed.heardText, { defaultUnit: unit, allowRate: isRate });
+      const view = isRate ? buildRatePlan(card.state, guarded, parsed.unclear) : buildEditPlan(card.state, guarded, parsed.unclear);
       view.warnings.unshift(...notes);
       if (Object.keys(view.set).length === 0) {
         await ParseLog.updateOne({ _id: log._id }, { outcome: "cancelled" });
@@ -267,6 +284,7 @@ export async function handleCommand(text: string, path: string): Promise<Command
         kind: "edit_request",
         requestId: card.request._id.toString(),
         set: view.set as Record<string, string | number | null>,
+        quote: isRate,
         heard,
         rawTexts,
       };
@@ -277,7 +295,7 @@ export async function handleCommand(text: string, path: string): Promise<Command
       await ParseLog.updateOne({ _id: log._id }, { outcome: "cancelled" });
       return {
         kind: "message",
-        text: `Didn't understand that as a command. You can dictate a new request, a change (“height 9 inch kar do”), a search (“Sharma dhundo”), “REQ 2 kholo”, “order mil gaya”, or “undo”.${stillWaiting}`,
+        text: `Didn't understand that as a command. You can dictate a new request, a change (“height 9 inch kar do”), your rate (“rate 18 rupees, GST 18 percent”), a search (“Sharma dhundo”), “REQ 2 kholo”, “order mil gaya”, or “undo”.${stillWaiting}`,
       };
   }
 }

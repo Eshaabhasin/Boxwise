@@ -11,7 +11,9 @@ export interface FieldChange {
 export interface HistoryEntry {
   planId: Types.ObjectId;
   /** create = card made, edit = fields changed, stage = moved, undo = an undo (never undone itself). */
-  action?: "create" | "edit" | "stage" | "undo";
+  action?: "create" | "edit" | "stage" | "quote" | "undo";
+  /** For "quote": the quotation that was approved. */
+  quotationId?: Types.ObjectId;
   summary: string;
   /** The dictated texts this change added to rawTexts; undo takes them off again. */
   texts?: string[];
@@ -58,7 +60,8 @@ const RequestSchema = new Schema<RequestDoc>(
         {
           planId: Schema.Types.ObjectId,
           // No default: entries from before phase 3 have none, and entryAction() works them out.
-          action: { type: String, enum: ["create", "edit", "stage", "undo"] },
+          action: { type: String, enum: ["create", "edit", "stage", "quote", "undo"] },
+          quotationId: Schema.Types.ObjectId,
           texts: { type: [String], default: undefined },
           summary: String,
           changes: [{ field: String, before: Schema.Types.Mixed, after: Schema.Types.Mixed, _id: false }],

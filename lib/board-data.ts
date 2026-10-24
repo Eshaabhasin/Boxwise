@@ -2,7 +2,7 @@ import "server-only";
 import { buildCardView, stagesFor, type BoardFilter, type BoxCardView } from "@/lib/board";
 import { connectDb } from "@/lib/db";
 import { STAGES, type Stage } from "@/lib/fields";
-import { Request } from "@/lib/models";
+import { Quotation, Request } from "@/lib/models";
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -31,6 +31,9 @@ export async function getBoardCards(filter: BoardFilter, q = ""): Promise<BoxCar
     .sort({ updatedAt: -1 })
     .limit(200)
     .lean();
+  // Cards with a draft quotation are waiting on the owner's approval.
+  const drafts = await Quotation.distinct("requestId", { status: "Draft", requestId: { $in: docs.map((d) => d._id) } });
+  const hasDraft = new Set(drafts.map((d) => String(d)));
   return docs.map((d) =>
     buildCardView({
       id: d._id.toString(),
@@ -39,6 +42,7 @@ export async function getBoardCards(filter: BoardFilter, q = ""): Promise<BoxCar
       stage: d.stage,
       specs: d.specs,
       missing: d.missing,
+      hasDraftQuote: hasDraft.has(d._id.toString()),
     }),
   );
 }

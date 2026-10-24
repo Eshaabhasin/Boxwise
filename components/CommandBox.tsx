@@ -7,6 +7,8 @@ import { CommandResult } from "@/lib/commands/types";
 
 /** Dispatch this on window to put the cursor back in the command box (the header button does). */
 export const FOCUS_COMMAND_EVENT = "boxbol:focus-command";
+/** Dispatch with { detail: text } to run a command as if it was said (SayButton does). */
+export const SAY_EVENT = "boxbol:say";
 
 /** Example dictations for the board, in the way he actually speaks. */
 const TRY_ONE = [
@@ -125,6 +127,15 @@ export default function CommandBox({ variant = "command", aside }: { variant?: C
   }, [busy, pathname, router, focus]);
 
   const submit = useCallback(() => send(text.trim()), [send, text]);
+
+  useEffect(() => {
+    const onSay = (e: Event) => {
+      const said = (e as CustomEvent<unknown>).detail;
+      if (typeof said === "string") void send(said);
+    };
+    window.addEventListener(SAY_EVENT, onSay);
+    return () => window.removeEventListener(SAY_EVENT, onSay);
+  }, [send]);
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {

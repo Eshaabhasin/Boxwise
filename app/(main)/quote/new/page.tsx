@@ -1,4 +1,3 @@
-import Link from "next/link";
 import CommandBox from "@/components/CommandBox";
 import Steps from "@/components/Steps";
 
@@ -28,9 +27,6 @@ export default function StartQuotationPage() {
               anything the customer didn&apos;t mention. Say “approve” to save the card and go on to the rate.
             </p>
           </div>
-          <Link href="/design/quote" className="text-sm font-medium text-ink-2 underline">
-            Preview the quotation screen with sample data
-          </Link>
         </aside>
       </div>
     </div>

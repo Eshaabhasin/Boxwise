@@ -1,3 +1,4 @@
+import { rupeesToPaise } from "@/lib/calc/money";
 import { toMm, isLengthUnit, type LengthUnit } from "@/lib/calc/units";
 import { getField, type FieldDef, type FieldKey, type SpecValue } from "@/lib/fields";
 import { numbersIn } from "@/lib/nlp/normalize";
@@ -55,6 +56,15 @@ function numberWasSaid(n: number, text: string, field: FieldDef): boolean {
   return implied?.some((p) => hasPhrase(text, p)) ?? false;
 }
 
+/** "18", "18.50", or "18 rupees 50 paise" all justify 18.5. */
+function moneyWasSaid(rupees: number, text: string): boolean {
+  if (numbersIn(text).has(rupees)) return true;
+  for (const m of text.matchAll(/(\d+)\s+(?:rupees?|rupaye|rupaiye|rs)\s+(\d{1,2})\s+paise/gi)) {
+    if (Number(m[1]) + Number(m[2]) / 100 === rupees) return true;
+  }
+  return false;
+}
+
 function matchOption(field: FieldDef, raw: string, text: string): string | { reason: string } {
   const options = field.options ?? [];
   const lowerRaw = raw.trim().toLowerCase();
@@ -73,11 +83,12 @@ function matchOption(field: FieldDef, raw: string, text: string): string | { rea
  * @param fields  the LLM's "fields" object
  * @param text    the normalized dictated text (all utterances for a corrected plan)
  * @param opts.defaultUnit  unit for sides said without one (an edit uses the card's unit)
+ * @param opts.allowRate    true only for the owner's own "set rate" command
  */
 export function guardRequestFields(
   fields: Record<string, unknown>,
   text: string,
-  opts: { defaultUnit?: LengthUnit } = {},
+  opts: { defaultUnit?: LengthUnit; allowRate?: boolean } = {},
 ): GuardedRequest {
   const out: GuardedRequest = { customer: {}, specs: {}, sizeWithoutUnit: null, dropped: [] };
   const drop = (field: string, value: unknown, reason: string) =>
@@ -91,8 +102,8 @@ export function guardRequestFields(
       drop(key, value, "not a field BoxBol knows");
       continue;
     }
-    if (field.ownerOnly) {
-      drop(key, value, "the rate is only set when you say it on the quotation step");
+    if (field.ownerOnly && !opts.allowRate) {
+      drop(key, value, "the rate is only set when you say it as your rate for a card");
       continue;
     }
     const k = field.key as FieldKey;
@@ -152,9 +163,13 @@ export function guardRequestFields(
         }
         break;
       }
-      case "money":
-        drop(key, value, "money is not taken from a request");
+      case "money": {
+        const n = toNumber(value);
+        if (n === null || n <= 0) drop(key, value, "not an amount");
+        else if (!moneyWasSaid(n, text)) drop(key, value, "this amount was not in what you said");
+        else out.specs[k] = rupeesToPaise(n);
         break;
+      }
     }
   }
 

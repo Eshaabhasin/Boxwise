@@ -35,7 +35,7 @@ function describe(f: FieldDef): string {
       parts.push("15-character GSTIN exactly as said");
       break;
     case "money":
-      parts.push("NEVER fill this");
+      parts.push("rupees per box as a number, exactly as the owner said it. ONLY for intent set_rate");
       break;
     default:
       parts.push("text, as said");
@@ -46,7 +46,7 @@ function describe(f: FieldDef): string {
 }
 
 export function systemPrompt(): string {
-  const fields = FIELD_DEFS.filter((f) => !f.ownerOnly).map(describe).join("\n");
+  const fields = FIELD_DEFS.map(describe).join("\n");
   return `You read commands that the owner of a corrugated box factory in India dictates by voice into his quotation app, and return JSON.
 The text comes from speech: no punctuation, run-on sentences, Hindi words mixed with English (Hinglish). Numbers are already digits.
 Each message starts with the screen he is on, then what he said.
@@ -57,22 +57,24 @@ Return ONLY this JSON object:
 Intents:
 - "create_request": a new box request from a customer (a company and box details).
 - "edit_request": change details of a card that already exists ("height 9 inch kar do", "quantity 800 karo", "Sharma ka address Bhiwandi daal do"). fields = only the changed fields.
+- "set_rate": the owner gives his rate and/or terms for a card ("rate 18 rupees per box GST 18 percent", "delivery 10 days payment 50 percent advance", "rate 17 karo"). fields = ratePerBox, gstPercent, deliveryTime, paymentTerms, validity, and any other field he changes in the same breath.
 - "search": find or list cards ("Sharma dhundo", "pending dikhao", "won wale dikhao"). query = company words or null; filter = "Pending", "New", "Quoted", "Sent", "Won", "Lost" or "All", or null.
 - "open": open one card ("Sharma ka card kholo", "REQ 3 kholo").
 - "set_stage": the order was won or lost, or a card goes back to new ("order mil gaya" = "Won", "mana kar diya" / "order nahi mila" = "Lost"). stage = "Won", "Lost" or "New".
 - "other": anything else.
 
-target: for edit_request, open and set_stage, the company name or "REQ <number>" exactly as said; null if he did not name one (he means the card on screen). Always null for create_request.
+target: for edit_request, set_rate, open and set_stage, the company name or "REQ <number>" exactly as said; null if he did not name one (he means the card on screen). Always null for create_request.
 
 Rules:
 1. Include a field ONLY if the speaker said it. Never guess, never add a default, never fill a value that was not said. Leave unsaid fields out completely.
 2. Copy numbers exactly as said. Do no maths and no unit conversion. For a size give the sides in the spoken unit and put that unit in dimUnit (only if a unit was said).
 3. "A by B by C" means length A, breadth B, height C.
 4. When the speaker corrects himself ("500 nahi 600", "500 sorry 600", "500 I mean 600", "500 matlab 600", "nahi nahi 45"), keep ONLY the last value.
-5. Never return a rate or price. If a rate is mentioned, leave it out and add a note to "unclear".
+5. ratePerBox is ONLY for intent set_rate, when the owner states his own rate. Never suggest, estimate or calculate a rate. In any other intent leave a mentioned rate out and add a note to "unclear".
 6. company is the customer's company name as said, with normal capitalisation. Words around it like "ke liye", "ka", "se", "ki taraf se", "naya order" are not part of the name. In an edit, a company name that only says which card goes in target, not in fields.
 7. If the text has "Earlier:" and "Correction:", start from the earlier command and apply the correction: corrected values replace earlier ones, new values are added, everything else stays. Return the full result with the same intent.
 8. "unclear" lists things that were said but do not fit. Keep it empty otherwise.
+9. Terms (deliveryTime, paymentTerms, validity) are short text in the speaker's own words ("10 days", "50 percent advance", "30 din credit", "15 din").
 
 Fields:
 ${fields}`;
@@ -156,6 +158,31 @@ export const FEW_SHOTS: readonly [Screen, string, object][] = [
     "card REQ-002 Verma Sweets",
     "Earlier: height 5 inch kar do. Correction: nahi 6",
     { intent: "edit_request", target: null, fields: { height: 6, dimUnit: "inch" } },
+  ],
+  [
+    "card REQ-001 Sharma Packaging",
+    "rate 18 rupees per box GST 18 percent delivery 10 days payment 50 percent advance",
+    { intent: "set_rate", target: null, fields: { ratePerBox: 18, gstPercent: 18, deliveryTime: "10 days", paymentTerms: "50 percent advance" } },
+  ],
+  [
+    "card REQ-002 Verma Sweets",
+    "12.5 rupaye ka rate lagao 12 percent GST aur validity 15 din",
+    { intent: "set_rate", target: null, fields: { ratePerBox: 12.5, gstPercent: 12, validity: "15 din" } },
+  ],
+  [
+    "board",
+    "Gupta Foods ka rate 9 rupees 50 paise payment 30 din credit",
+    { intent: "set_rate", target: "Gupta Foods", fields: { ratePerBox: 9.5, paymentTerms: "30 din credit" } },
+  ],
+  [
+    "card REQ-001 Sharma Packaging",
+    "Earlier: rate 18 rupees per box GST 18 percent. Correction: nahi rate 17",
+    { intent: "set_rate", target: null, fields: { ratePerBox: 17, gstPercent: 18 } },
+  ],
+  [
+    "card REQ-003 Mehta Plastics",
+    "1000 box kar do aur rate 14",
+    { intent: "set_rate", target: null, fields: { quantity: 1000, ratePerBox: 14 } },
   ],
   [
     "board",
