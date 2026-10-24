@@ -24,8 +24,8 @@ function StageBadge({ stage }: { stage: BoxCardView["stage"] }) {
 }
 
 /** A request card drawn as a cardboard box: striped flaps, tape, specs, and what it is waiting on. */
-export default function BoxCard({ card, href }: { card: BoxCardView; href?: string }) {
-  const link = href ?? `/requests/${card.id}`;
+export default function BoxCard({ card, href, preview }: { card: BoxCardView; href?: string; preview?: boolean }) {
+  const link = href ?? `/quote/${card.id}`;
   return (
     <article className="hard-shadow relative border-2 border-ink bg-kraft-2">
       <div className="flap h-7 border-b-2 border-ink" />
@@ -69,12 +69,16 @@ export default function BoxCard({ card, href }: { card: BoxCardView; href?: stri
         )}
 
         <div className="mt-4 flex items-end justify-between gap-3">
-          <Link
-            href={link}
-            className="hard-shadow-sm border-2 border-ink bg-ink px-3.5 py-2 font-display text-sm font-extrabold uppercase tracking-[0.015em] text-cream"
-          >
-            {card.stage === "New" ? "Add rate" : "Open"}
-          </Link>
+          {preview ? (
+            <span className="eyebrow text-[0.6rem] text-ink-2">Preview · not saved yet</span>
+          ) : (
+            <Link
+              href={link}
+              className="hard-shadow-sm border-2 border-ink bg-ink px-3.5 py-2 font-display text-sm font-extrabold uppercase tracking-[0.015em] text-cream"
+            >
+              {card.stage === "New" ? "Add rate" : "Open"}
+            </Link>
+          )}
           {card.waitingOn && (
             <p className="text-right">
               <span className="eyebrow block text-[0.58rem] text-ink-2">Waiting on</span>

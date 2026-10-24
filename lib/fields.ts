@@ -54,6 +54,13 @@ export interface FieldDef {
   kind: FieldKind;
   /** Allowed values for kind "enum", in the exact spelling shown on the card and PDF. */
   options?: readonly string[];
+  /**
+   * For enums: what he says for each option. The guard only keeps an option if
+   * one of these words (or the option itself) is in the dictated text.
+   */
+  optionAliases?: Readonly<Record<string, readonly string[]>>;
+  /** For numbers: words that justify a value that is not written as a digit ("plain" = 0 colours). */
+  impliedNumbers?: Readonly<Record<number, readonly string[]>>;
   /** Words he may say for this field, including Hinglish. Fed to the LLM prompt. */
   aliases: readonly string[];
   requiredAt: RequiredAt;
@@ -65,6 +72,16 @@ export interface FieldDef {
   onPdf: boolean;
   /** Extra hint for the LLM when the field is easy to confuse. */
   hint?: string;
+}
+
+/** "B flute", "flute B", "B-flute"... for each flute letter. */
+function fluteAliases(letters: readonly string[]): Record<string, string[]> {
+  return Object.fromEntries(
+    letters.map((l) => {
+      const x = l.toLowerCase();
+      return [l, [`${x} flute`, `flute ${x}`, `${x}-flute`, `${x} fluting`, `${x} type flute`]];
+    }),
+  );
 }
 
 export const FIELDS = [
@@ -79,13 +96,13 @@ export const FIELDS = [
   { key: "length", group: "box", label: "Length", kind: "length", aliases: ["length", "lambai", "L"], requiredAt: "card", onPdf: true, hint: "In 'A by B by C' the first number is length." },
   { key: "breadth", group: "box", label: "Breadth", kind: "length", aliases: ["breadth", "width", "chaudai", "W"], requiredAt: "card", onPdf: true, hint: "In 'A by B by C' the second number is breadth." },
   { key: "height", group: "box", label: "Height", kind: "length", aliases: ["height", "unchai", "depth", "H"], requiredAt: "card", onPdf: true, hint: "In 'A by B by C' the third number is height." },
-  { key: "dimUnit", group: "box", label: "Size unit", kind: "enum", options: ["mm", "cm", "inch"], aliases: ["inch", "inches", "suta", "cm", "centimetre", "mm", "millimetre"], requiredAt: "card", onPdf: false },
-  { key: "style", group: "box", label: "Box style", kind: "enum", options: ["RSC", "Die-cut", "HSC", "FOL", "Telescopic", "Tray"], aliases: ["style", "type", "RSC", "regular slotted", "die cut", "die-cut", "half slotted", "full overlap", "telescopic", "tray"], requiredAt: "card", onPdf: true },
-  { key: "sizeType", group: "box", label: "Inner / outer size", kind: "enum", options: ["Inner", "Outer"], aliases: ["inner", "andar", "inside", "outer", "bahar", "outside"], requiredAt: null, onPdf: true },
+  { key: "dimUnit", group: "box", label: "Size unit", kind: "enum", options: ["mm", "cm", "inch"], optionAliases: { mm: ["mm", "millimetre", "millimeter", "mili"], cm: ["cm", "centimetre", "centimeter", "sentimeter"], inch: ["inch", "inches", "in", "inchi"] }, aliases: ["unit", "inch", "cm", "mm"], requiredAt: "card", onPdf: false },
+  { key: "style", group: "box", label: "Box style", kind: "enum", options: ["RSC", "Die-cut", "HSC", "FOL", "Telescopic", "Tray"], optionAliases: { RSC: ["rsc", "regular slotted", "regular box"], "Die-cut": ["die cut", "die-cut", "diecut", "dye cut"], HSC: ["hsc", "half slotted"], FOL: ["fol", "full overlap"], Telescopic: ["telescopic", "top bottom", "top and bottom"], Tray: ["tray"] }, aliases: ["style", "type", "design"], requiredAt: "card", onPdf: true },
+  { key: "sizeType", group: "box", label: "Inner / outer size", kind: "enum", options: ["Inner", "Outer"], optionAliases: { Inner: ["inner", "andar", "inside", "internal", "id"], Outer: ["outer", "bahar", "outside", "external", "od"] }, aliases: ["inner size", "outer size", "andar ka size", "bahar ka size"], requiredAt: null, onPdf: true },
 
   // Strength
   { key: "ply", group: "strength", label: "Ply", kind: "int", options: ["3", "5", "7"], aliases: ["ply", "parat", "layer"], requiredAt: "card", onPdf: true },
-  { key: "flute", group: "strength", label: "Flute", kind: "enum", options: ["A", "B", "C", "E", "F", "BC", "BE", "CC"], aliases: ["flute", "fluting"], requiredAt: "card", onPdf: true },
+  { key: "flute", group: "strength", label: "Flute", kind: "enum", options: ["A", "B", "C", "E", "F", "BC", "BE", "CC"], optionAliases: fluteAliases(["A", "B", "C", "E", "F", "BC", "BE", "CC"]), aliases: ["flute", "fluting"], requiredAt: "card", onPdf: true, hint: "Only a flute letter the speaker said next to the word flute." },
   { key: "gsm", group: "strength", label: "GSM", kind: "int", aliases: ["gsm", "grammage"], requiredAt: null, onPdf: true },
   { key: "bf", group: "strength", label: "BF", kind: "int", aliases: ["bf", "bursting factor"], requiredAt: null, onPdf: true },
   { key: "burstingStrength", group: "strength", label: "Bursting strength (kg/cm²)", kind: "int", aliases: ["bursting strength", "bs", "burst"], requiredAt: null, onPdf: true },
@@ -93,9 +110,9 @@ export const FIELDS = [
   { key: "stacking", group: "strength", label: "Stacking (boxes high)", kind: "int", aliases: ["stacking", "stack", "upar upar", "tier"], requiredAt: null, onPdf: true },
 
   // Extras
-  { key: "printColours", group: "extras", label: "Printing (colours)", kind: "int", aliases: ["print", "printing", "colour", "color", "rang", "plain"], requiredAt: "card", onPdf: true, hint: "'plain' or 'no print' means 0." },
-  { key: "joint", group: "extras", label: "Joint", kind: "enum", options: ["Stitched", "Glued", "Taped"], aliases: ["joint", "stitch", "stitching", "pin", "glue", "gum", "pasting", "tape"], requiredAt: "card", onPdf: true },
-  { key: "coating", group: "extras", label: "Coating", kind: "enum", options: ["None", "Lamination", "Varnish", "Wax"], aliases: ["coating", "lamination", "varnish", "wax", "polish"], requiredAt: null, onPdf: true },
+  { key: "printColours", group: "extras", label: "Printing (colours)", kind: "int", impliedNumbers: { 0: ["plain", "no print", "without print", "bina print", "print nahi", "printing nahi", "no printing"], 1: ["single colour", "single color", "one colour", "one color"] }, aliases: ["print", "printing", "colour", "color", "rang", "plain"], requiredAt: "card", onPdf: true, hint: "'plain' or 'no print' means 0." },
+  { key: "joint", group: "extras", label: "Joint", kind: "enum", options: ["Stitched", "Glued", "Taped"], optionAliases: { Stitched: ["stitch", "stitched", "stitching", "pin", "pinning", "staple", "stapled"], Glued: ["glue", "glued", "gluing", "gum", "pasting", "paste", "pasted"], Taped: ["tape", "taped"] }, aliases: ["joint", "jod"], requiredAt: "card", onPdf: true },
+  { key: "coating", group: "extras", label: "Coating", kind: "enum", options: ["None", "Lamination", "Varnish", "Wax"], optionAliases: { None: ["no coating", "without coating", "coating nahi", "bina coating"], Lamination: ["lamination", "laminated", "laminate"], Varnish: ["varnish", "varnished"], Wax: ["wax", "waxed"] }, aliases: ["coating", "polish"], requiredAt: null, onPdf: true },
   { key: "partitions", group: "extras", label: "Partitions", kind: "text", aliases: ["partition", "partitions", "khana", "divider"], requiredAt: null, onPdf: true },
 
   // Commercial
@@ -108,6 +125,9 @@ export const FIELDS = [
 ] as const satisfies readonly FieldDef[];
 
 export type FieldKey = (typeof FIELDS)[number]["key"];
+
+/** The same list, typed loosely so optional properties can be read on any field. */
+export const FIELD_DEFS: readonly FieldDef[] = FIELDS;
 
 export const FIELD_KEYS = FIELDS.map((f) => f.key) as readonly FieldKey[];
 

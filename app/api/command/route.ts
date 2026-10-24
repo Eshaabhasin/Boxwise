@@ -1,17 +1,36 @@
 import { NextResponse } from "next/server";
+import { getPendingPlanResult, handleCommand } from "@/lib/commands/handle";
 import { CommandInput, type CommandResult } from "@/lib/commands/types";
 
-// The single entry point for everything dictated. Phase 1 only echoes the text
-// so the command box can be tested; parsing arrives in phase 2.
+function message(err: unknown): string {
+  const text = err instanceof Error ? err.message : String(err);
+  if (/MONGODB_URI|ECONNREFUSED|querySrv|ServerSelection/i.test(text)) {
+    return "Can't reach the database. Check MONGODB_URI in .env.local and restart the server.";
+  }
+  return `Something went wrong: ${text}`;
+}
+
+// The single entry point for everything dictated.
 export async function POST(request: Request) {
   const parsed = CommandInput.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     const result: CommandResult = { kind: "error", text: parsed.error.issues[0]?.message ?? "Invalid command" };
     return NextResponse.json(result, { status: 400 });
   }
-  const result: CommandResult = {
-    kind: "message",
-    text: `Heard on ${parsed.data.path}: "${parsed.data.text}". Understanding requests arrives in phase 2.`,
-  };
-  return NextResponse.json(result);
+  try {
+    return NextResponse.json(await handleCommand(parsed.data.text));
+  } catch (err) {
+    console.error("command failed", err);
+    const result: CommandResult = { kind: "error", text: message(err) };
+    return NextResponse.json(result, { status: 500 });
+  }
+}
+
+/** The plan waiting for approval, if any, so a screen can show it after a reload. */
+export async function GET() {
+  try {
+    return NextResponse.json({ plan: await getPendingPlanResult() });
+  } catch {
+    return NextResponse.json({ plan: null });
+  }
 }

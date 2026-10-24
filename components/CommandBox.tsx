@@ -2,6 +2,7 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import BoxCard from "@/components/BoxCard";
 import { CommandResult } from "@/lib/commands/types";
 
 /** Dispatch this on window to put the cursor back in the command box (the header button does). */
@@ -57,6 +58,21 @@ export default function CommandBox({ variant = "command", aside }: { variant?: C
     focus();
   }, [pathname, focus]);
 
+  // Show a plan that is still waiting for "approve" after a reload or a screen change.
+  useEffect(() => {
+    let live = true;
+    fetch("/api/command")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body: unknown) => {
+        const plan = CommandResult.safeParse((body as { plan?: unknown } | null)?.plan);
+        if (live && plan.success && plan.data.kind === "plan") setResult(plan.data);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [pathname]);
+
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === "visible") focus();
@@ -75,8 +91,7 @@ export default function CommandBox({ variant = "command", aside }: { variant?: C
     };
   }, [focus]);
 
-  const submit = useCallback(async () => {
-    const spoken = text.trim();
+  const send = useCallback(async (spoken: string) => {
     if (!spoken || busy) return;
     setBusy(true);
     try {
@@ -107,7 +122,9 @@ export default function CommandBox({ variant = "command", aside }: { variant?: C
       // Re-focus after React re-enables the box.
       requestAnimationFrame(focus);
     }
-  }, [text, busy, pathname, router, focus]);
+  }, [busy, pathname, router, focus]);
+
+  const submit = useCallback(() => send(text.trim()), [send, text]);
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
@@ -194,15 +211,20 @@ export default function CommandBox({ variant = "command", aside }: { variant?: C
         </button>
       </div>
 
-      {result && <ResultPanel result={result} />}
+      {result && <ResultPanel result={result} onSay={(t) => void send(t)} busy={busy} />}
     </section>
   );
 }
 
-function ResultPanel({ result }: { result: CommandResult }) {
+function ResultPanel({ result, onSay, busy }: { result: CommandResult; onSay: (text: string) => void; busy: boolean }) {
   if (result.kind === "plan") {
     return (
       <div className="border-t-2 border-ink bg-paper px-4 py-3">
+        {result.card && (
+          <div className="mb-4 mt-2">
+            <BoxCard card={result.card} preview />
+          </div>
+        )}
         <p className="eyebrow text-ink-2">What I will set</p>
         <p className="mt-1 font-display text-lg font-extrabold uppercase">{result.title}</p>
         <ul className="mt-2 divide-y divide-rule font-mono text-sm">
@@ -219,7 +241,25 @@ function ResultPanel({ result }: { result: CommandResult }) {
             ))}
           </ul>
         )}
-        <p className="mt-2 text-xs text-ink-2">Say “approve”, or speak a correction. “Cancel” drops it.</p>
+        <p className="mt-3 text-xs text-ink-2">Say “approve”, or speak a correction. “Cancel” drops it.</p>
+        <div className="mt-3 flex gap-3">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onSay("approve")}
+            className="hard-shadow-sm border-2 border-ink bg-brick px-4 py-2 font-display font-extrabold uppercase tracking-[0.015em] text-cream disabled:opacity-60"
+          >
+            Approve
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onSay("cancel")}
+            className="border-2 border-ink bg-paper px-4 py-2 font-display font-extrabold uppercase tracking-[0.015em] disabled:opacity-60"
+          >
+            Cancel
+          </button>
+        </div>
       </div>
     );
   }
