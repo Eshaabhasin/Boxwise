@@ -56,6 +56,18 @@ function numberWasSaid(n: number, text: string, field: FieldDef): boolean {
   return implied?.some((p) => hasPhrase(text, p)) ?? false;
 }
 
+/**
+ * "Sunil ji" -> "Sunil", "Mr Rajesh" -> "Rajesh": the card keeps the name, not the
+ * politeness around it. Only for the contact person, so "Shree Ganesh Traders" stays whole.
+ */
+export function personName(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^(?:mr|mrs|ms|shri|shree|sri|smt)\.?\s+/i, "")
+    .replace(/(?:\s+(?:ji|jee|sahab|saheb|sahib|bhai|bhaiya|sir|madam|seth))+$/i, "")
+    .trim();
+}
+
 /** "18", "18.50", or "18 rupees 50 paise" all justify 18.5. */
 function moneyWasSaid(rupees: number, text: string): boolean {
   if (numbersIn(text).has(rupees)) return true;
@@ -110,7 +122,7 @@ export function guardRequestFields(
 
     switch (field.kind) {
       case "text": {
-        const s = String(value).trim();
+        const s = k === "contactPerson" ? personName(String(value)) : String(value).trim();
         const ws = words(s);
         const said = ws.filter((w) => hasPhrase(text, w)).length;
         // Names must be fully heard; longer free text (addresses) mostly heard.

@@ -1,0 +1,36 @@
+[
+  {
+    "at": "2026-10-24T10:39:25.223Z",
+    "model": "openai/gpt-oss-120b",
+    "total": 30,
+    "passed": 22,
+    "failed": [],
+    "notChecked": [
+      "22-hsc",
+      "24-wax-plain-mm",
+      "25-tray",
+      "26-bahar-ka-size",
+      "27-ply-sorry",
+      "28-telescopic",
+      "29-varnish",
+      "30-inner-glued-mm"
+    ],
+    "passRate": 100,
+    "complete": false,
+    "durationSec": 554,
+    "note": "First run. The 8 not checked hit Groq's free daily token limit (429 TPD); none were misread."
+  },
+  {
+    "at": "2026-10-24T11:04:32.580Z",
+    "model": "openai/gpt-oss-20b",
+    "total": 30,
+    "passed": 29,
+    "failed": [
+      "09-contact-phone"
+    ],
+    "notChecked": [],
+    "passRate": 96.7,
+    "complete": true,
+    "durationSec": 960
+  }
+]

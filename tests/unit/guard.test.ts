@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { guardRequestFields } from "@/lib/nlp/guard";
+import { guardRequestFields, personName } from "@/lib/nlp/guard";
 import { normalize } from "@/lib/nlp/normalize";
 import { FEW_SHOTS } from "@/lib/nlp/prompt";
 import { LlmCommandOutput } from "@/lib/nlp/schemas";
@@ -120,5 +120,28 @@ describe("the owner's rate (set_rate only)", () => {
     const g = guardRequestFields({ ratePerBox: 20 }, normalize("rate 18 rupees"), { allowRate: true });
     expect(g.specs.ratePerBox).toBeUndefined();
     expect(g.dropped[0]?.reason).toMatch(/not in what you said/);
+  });
+});
+
+describe("contact person names (harness 09-contact-phone)", () => {
+  // Regression: gpt-oss-20b returned "Sunil ji" for "contact Sunil ji"; the card should say "Sunil".
+  it("drops honorifics around the name", () => {
+    const text = normalize("naya order Agarwal Plastics ka contact Sunil ji 9822012345");
+    expect(guardRequestFields({ contactPerson: "Sunil ji" }, text).customer.contactPerson).toBe("Sunil");
+  });
+
+  it.each([
+    ["Rakesh bhai", "Rakesh"],
+    ["Mr Rajesh", "Rajesh"],
+    ["Sharma sahab", "Sharma"],
+    ["Anil Kumar ji", "Anil Kumar"],
+    ["Ji Ho", "Ji Ho"],
+  ])("%s -> %s", (raw, name) => {
+    expect(personName(raw)).toBe(name);
+  });
+
+  it("leaves company names alone", () => {
+    const text = normalize("Shree Ganesh Traders 500 box");
+    expect(guardRequestFields({ company: "Shree Ganesh Traders" }, text).customer.company).toBe("Shree Ganesh Traders");
   });
 });

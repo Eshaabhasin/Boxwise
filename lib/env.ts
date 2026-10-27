@@ -5,6 +5,8 @@ const EnvSchema = z.object({
   MONGODB_URI: z.string().min(1, "MONGODB_URI is not set"),
   GROQ_API_KEY: z.string().default(""),
   GROQ_MODEL: z.string().default("openai/gpt-oss-120b"),
+  GROQ_FALLBACK_MODEL: z.string().default("openai/gpt-oss-20b"),
+  GROQ_REASONING_EFFORT: z.enum(["low", "medium", "high"]).default("low"),
   LLM_PROVIDER: z.enum(["groq", "ollama"]).default("groq"),
   OLLAMA_BASE_URL: z.string().default("http://localhost:11434"),
   OLLAMA_MODEL: z.string().default("llama3.1:8b"),

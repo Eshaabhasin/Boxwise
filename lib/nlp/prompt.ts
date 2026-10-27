@@ -3,87 +3,65 @@ import type { ChatMessage } from "@/lib/nlp/llm";
 
 /**
  * The command-reading prompt. The field list is built from lib/fields.ts, so
- * editing that file updates the prompt. Examples raise accuracy more than
- * longer instructions, so most of this is few-shot examples.
+ * editing that file updates the prompt. Each message carries the screen it
+ * was said on, so "height 9 inch kar do" on a card means that card.
+ *
+ * Kept small on purpose: every command sends all of it, and Groq's free tier
+ * counts tokens per minute and per day. Each example below teaches something
+ * the others don't; add one only for a mistake the harness actually found.
  * The text the LLM sees is already normalized: numbers are digits.
- * Each message carries the screen it was spoken on, so "height 9 inch kar do"
- * on a card means that card.
  */
 
+const KIND: Record<FieldDef["kind"], string> = {
+  text: "text as said",
+  phone: "digits",
+  gstin: "15-char GSTIN as said",
+  int: "whole number",
+  length: "number in the spoken unit",
+  kg: "kg",
+  money: "rupees, ONLY in set_rate",
+  percent: "percent",
+  enum: "",
+};
+
 function describe(f: FieldDef): string {
-  const parts = [`- ${f.key} (${f.label}): `];
-  switch (f.kind) {
-    case "enum":
-      parts.push(`one of ${(f.options ?? []).map((o) => JSON.stringify(o)).join(", ")}`);
-      break;
-    case "length":
-      parts.push("number, in the unit spoken (do not convert)");
-      break;
-    case "kg":
-      parts.push("number of kg");
-      break;
-    case "int":
-      parts.push(f.options ? `whole number, one of ${f.options.join(", ")}` : "whole number");
-      break;
-    case "percent":
-      parts.push("number (percent)");
-      break;
-    case "phone":
-      parts.push("phone number as digits");
-      break;
-    case "gstin":
-      parts.push("15-character GSTIN exactly as said");
-      break;
-    case "money":
-      parts.push("rupees per box as a number, exactly as the owner said it. ONLY for intent set_rate");
-      break;
-    default:
-      parts.push("text, as said");
-  }
-  if (f.aliases.length) parts.push(`. Said as: ${f.aliases.join(", ")}`);
-  if (f.hint) parts.push(`. ${f.hint}`);
-  return parts.join("");
+  const type = f.kind === "enum" ? (f.options ?? []).join("|") : f.options ? `${KIND[f.kind]} ${f.options.join("|")}` : KIND[f.kind];
+  const aliases = f.aliases.length ? ` (${f.aliases.join(", ")})` : "";
+  return `${f.key}: ${type}${aliases}${f.hint ? `. ${f.hint}` : ""}`;
 }
 
 export function systemPrompt(): string {
-  const fields = FIELD_DEFS.map(describe).join("\n");
-  return `You read commands that the owner of a corrugated box factory in India dictates by voice into his quotation app, and return JSON.
-The text comes from speech: no punctuation, run-on sentences, Hindi words mixed with English (Hinglish). Numbers are already digits.
-Each message starts with the screen he is on, then what he said.
-
-Return ONLY this JSON object:
-{"intent": ..., "target": string|null, "stage": string|null, "query": string|null, "filter": string|null, "fields": { <field key>: <value> }, "unclear": [<short notes>]}
+  return `You read commands that a corrugated box factory owner in India dictates by voice (Hinglish, no punctuation, numbers already digits) and return one JSON object:
+{"intent", "target", "stage", "query", "filter", "fields": {key: value}, "unclear": [notes]}
+Each message gives the screen he is on, then what he said.
 
 Intents:
-- "create_request": a new box request from a customer (a company and box details).
-- "repeat_request": a new card that copies a customer's last order ("same as last time for Sharma Packaging", "Gupta Foods wala pichla order phir se"). target = the company; fields = only what he changes from last time.
-- "edit_request": change details of a card that already exists ("height 9 inch kar do", "quantity 800 karo", "Sharma ka address Bhiwandi daal do"). fields = only the changed fields.
-- "set_rate": the owner gives his rate and/or terms for a card ("rate 18 rupees per box GST 18 percent", "delivery 10 days payment 50 percent advance", "rate 17 karo"). fields = ratePerBox, gstPercent, deliveryTime, paymentTerms, validity, and any other field he changes in the same breath.
-- "search": find or list cards or quotations ("Sharma dhundo", "pending dikhao", "won wale dikhao", "Sharma ki history", "Gupta ke quotation dikhao"). query = company words or null; filter = "Pending", "New", "Quoted", "Sent", "Won", "Lost" or "All", or null.
-- "open": open one card ("Sharma ka card kholo", "REQ 3 kholo").
-- "set_stage": the order was won or lost, or a card goes back to new ("order mil gaya" = "Won", "mana kar diya" / "order nahi mila" = "Lost"). stage = "Won", "Lost" or "New".
-- "other": anything else.
-
-target: for repeat_request, edit_request, set_rate, open and set_stage, the company name or "REQ <number>" exactly as said; null if he did not name one (he means the card on screen). Always null for create_request.
+- create_request: a new box request from a customer.
+- repeat_request: new card copying a customer's last order ("same as last time for X"). target = company; fields = only what changes.
+- edit_request: change an existing card. fields = only the changed fields.
+- set_rate: his own rate and/or terms for a card (ratePerBox, gstPercent, deliveryTime, paymentTerms, validity, plus anything else he changes).
+- search: find cards or quotations. query = company words or null; filter = Pending|New|Quoted|Sent|Won|Lost|All or null.
+- open: open one card.
+- set_stage: stage = Won ("order mil gaya"), Lost ("mana kar diya", "order nahi mila") or New.
+- other: anything else.
+target = company name or "REQ <n>" as said, for repeat/edit/set_rate/open/set_stage; null if none was said (he means the card on screen).
 
 Rules:
-1. Include a field ONLY if the speaker said it. Never guess, never add a default, never fill a value that was not said. Leave unsaid fields out completely.
-2. Copy numbers exactly as said. Do no maths and no unit conversion. For a size give the sides in the spoken unit and put that unit in dimUnit (only if a unit was said).
-3. "A by B by C" means length A, breadth B, height C.
-4. When the speaker corrects himself ("500 nahi 600", "500 sorry 600", "500 I mean 600", "500 matlab 600", "nahi nahi 45"), keep ONLY the last value.
-5. ratePerBox is ONLY for intent set_rate, when the owner states his own rate. Never suggest, estimate or calculate a rate. In any other intent leave a mentioned rate out and add a note to "unclear".
-6. company is the customer's company name as said, with normal capitalisation. Words around it like "ke liye", "ka", "se", "ki taraf se", "naya order" are not part of the name. In an edit, a company name that only says which card goes in target, not in fields.
-7. If the text has "Earlier:" and "Correction:", start from the earlier command and apply the correction: corrected values replace earlier ones, new values are added, everything else stays. Return the full result with the same intent.
-8. "unclear" lists things that were said but do not fit. Keep it empty otherwise.
-9. Terms (deliveryTime, paymentTerms, validity) are short text in the speaker's own words ("10 days", "50 percent advance", "30 din credit", "15 din").
+1. Include a field ONLY if he said it. Never guess or add defaults.
+2. Copy numbers as said; no maths, no unit conversion. Sizes: sides in the spoken unit, unit in dimUnit (only if said). "A by B by C" = length, breadth, height.
+3. Corrections ("500 nahi 600", "sorry", "I mean", "matlab", "nahi nahi") keep only the last value.
+4. Never suggest or calculate a rate. ratePerBox only in set_rate; anywhere else leave it out and note it in unclear.
+5. company = the customer's name as said, capitalised; not "ke liye", "ka", "se", "naya order". A name that only picks the card goes in target.
+6. "Earlier: ... Correction: ..." means apply the correction to the earlier command and return the full result, same intent.
+7. Terms are short text in his words ("10 days", "30 din credit").
 
 Fields:
-${fields}`;
+${FIELD_DEFS.map(describe).join("\n")}`;
 }
 
 export type Screen = string;
 
-/** [screen, dictated (already normalized), expected JSON] */
+/** [screen, dictated (already normalized), expected JSON]. Unused keys are left out; zod fills them. */
 export const FEW_SHOTS: readonly [Screen, string, object][] = [
   [
     "new quote",
@@ -102,23 +80,18 @@ export const FEW_SHOTS: readonly [Screen, string, object][] = [
   ],
   [
     "new quote",
-    "Gupta Foods se Rakesh ji ka call tha 1000 box chahiye 14 by 10 by 6 inch 3 ply B flute 15 kilo load 1 colour print unka number 9876543210",
-    { intent: "create_request", fields: { company: "Gupta Foods", contactPerson: "Rakesh", phone: "9876543210", quantity: 1000, length: 14, breadth: 10, height: 6, dimUnit: "inch", ply: 3, flute: "B", loadKg: 15, printColours: 1 } },
+    "Gupta Foods se Rakesh ji ka call tha 1000 box chahiye 14 by 10 by 6 inch 3 ply B flute 1 colour print unka number 9876543210",
+    { intent: "create_request", fields: { company: "Gupta Foods", contactPerson: "Rakesh", phone: "9876543210", quantity: 1000, length: 14, breadth: 10, height: 6, dimUnit: "inch", ply: 3, flute: "B", printColours: 1 } },
   ],
   [
     "board",
-    "Mehta Plastics outer size 18 by 12 by 12 inch 7 ply BC flute die cut 250 pieces 40 kg load lamination chahiye",
-    { intent: "create_request", fields: { company: "Mehta Plastics", sizeType: "Outer", length: 18, breadth: 12, height: 12, dimUnit: "inch", ply: 7, flute: "BC", style: "Die-cut", quantity: 250, loadKg: 40, coating: "Lamination" } },
+    "Mehta Plastics outer size 18 by 12 by 12 inch 7 ply BC flute die cut 250 pieces lamination chahiye",
+    { intent: "create_request", fields: { company: "Mehta Plastics", sizeType: "Outer", length: 18, breadth: 12, height: 12, dimUnit: "inch", ply: 7, flute: "BC", style: "Die-cut", quantity: 250, coating: "Lamination" } },
   ],
   [
     "new quote",
-    "Kapoor Textiles 600 by 400 by 400 cm sorry mm 5 ply 800 box",
-    { intent: "create_request", fields: { company: "Kapoor Textiles", length: 600, breadth: 400, height: 400, dimUnit: "mm", ply: 5, quantity: 800 } },
-  ],
-  [
-    "new quote",
-    "Shree Ganesh Traders address plot 12 MIDC Bhiwandi GST number 27AAPFU0939F1ZV 5000 box 8 by 6 by 4 inch 3 ply RSC 2 colour print",
-    { intent: "create_request", fields: { company: "Shree Ganesh Traders", address: "Plot 12, MIDC, Bhiwandi", gstin: "27AAPFU0939F1ZV", quantity: 5000, length: 8, breadth: 6, height: 4, dimUnit: "inch", ply: 3, style: "RSC", printColours: 2 } },
+    "Shree Ganesh Traders address plot 12 MIDC Bhiwandi GST number 27AAPFU0939F1ZV 5000 box 8 by 6 by 4 inch RSC",
+    { intent: "create_request", fields: { company: "Shree Ganesh Traders", address: "Plot 12, MIDC, Bhiwandi", gstin: "27AAPFU0939F1ZV", quantity: 5000, length: 8, breadth: 6, height: 4, dimUnit: "inch", style: "RSC" } },
   ],
   [
     "new quote",
@@ -132,23 +105,13 @@ export const FEW_SHOTS: readonly [Screen, string, object][] = [
   ],
   [
     "new quote",
-    "naya order Singh Brothers ka 400 box",
-    { intent: "create_request", fields: { company: "Singh Brothers", quantity: 400 } },
-  ],
-  [
-    "new quote",
-    "Earlier: Sharma Packaging 500 box 12 by 10 by 8 inch 5 ply 30 kilo load 2 colour print. Correction: nahi 600 box aur B flute",
-    { intent: "create_request", fields: { company: "Sharma Packaging", quantity: 600, length: 12, breadth: 10, height: 8, dimUnit: "inch", ply: 5, loadKg: 30, printColours: 2, flute: "B" } },
+    "Earlier: Sharma Packaging 500 box 12 by 10 by 8 inch 5 ply. Correction: nahi 600 box aur B flute",
+    { intent: "create_request", fields: { company: "Sharma Packaging", quantity: 600, length: 12, breadth: 10, height: 8, dimUnit: "inch", ply: 5, flute: "B" } },
   ],
   [
     "card REQ-001 Sharma Packaging",
-    "height 9 inch kar do",
-    { intent: "edit_request", target: null, fields: { height: 9, dimUnit: "inch" } },
-  ],
-  [
-    "card REQ-001 Sharma Packaging",
-    "quantity 800 karo aur joint glued",
-    { intent: "edit_request", target: null, fields: { quantity: 800, joint: "Glued" } },
+    "height 9 inch kar do aur joint glued",
+    { intent: "edit_request", fields: { height: 9, dimUnit: "inch", joint: "Glued" } },
   ],
   [
     "board",
@@ -156,59 +119,24 @@ export const FEW_SHOTS: readonly [Screen, string, object][] = [
     { intent: "edit_request", target: "Sharma Packaging", fields: { address: "Bhiwandi godown", phone: "9820012345" } },
   ],
   [
-    "card REQ-002 Verma Sweets",
-    "Earlier: height 5 inch kar do. Correction: nahi 6",
-    { intent: "edit_request", target: null, fields: { height: 6, dimUnit: "inch" } },
-  ],
-  [
     "card REQ-001 Sharma Packaging",
-    "rate 18 rupees per box GST 18 percent delivery 10 days payment 50 percent advance",
-    { intent: "set_rate", target: null, fields: { ratePerBox: 18, gstPercent: 18, deliveryTime: "10 days", paymentTerms: "50 percent advance" } },
-  ],
-  [
-    "card REQ-002 Verma Sweets",
-    "12.5 rupaye ka rate lagao 12 percent GST aur validity 15 din",
-    { intent: "set_rate", target: null, fields: { ratePerBox: 12.5, gstPercent: 12, validity: "15 din" } },
+    "rate 18 rupees per box GST 18 percent delivery 10 days payment 50 percent advance validity 15 din",
+    { intent: "set_rate", fields: { ratePerBox: 18, gstPercent: 18, deliveryTime: "10 days", paymentTerms: "50 percent advance", validity: "15 din" } },
   ],
   [
     "board",
-    "Gupta Foods ka rate 9 rupees 50 paise payment 30 din credit",
-    { intent: "set_rate", target: "Gupta Foods", fields: { ratePerBox: 9.5, paymentTerms: "30 din credit" } },
-  ],
-  [
-    "card REQ-001 Sharma Packaging",
-    "Earlier: rate 18 rupees per box GST 18 percent. Correction: nahi rate 17",
-    { intent: "set_rate", target: null, fields: { ratePerBox: 17, gstPercent: 18 } },
-  ],
-  [
-    "card REQ-003 Mehta Plastics",
-    "1000 box kar do aur rate 14",
-    { intent: "set_rate", target: null, fields: { quantity: 1000, ratePerBox: 14 } },
-  ],
-  [
-    "board",
-    "same as last time for Sharma Packaging",
-    { intent: "repeat_request", target: "Sharma Packaging" },
+    "Gupta Foods ka rate 9 rupees 50 paise aur 1000 box kar do",
+    { intent: "set_rate", target: "Gupta Foods", fields: { ratePerBox: 9.5, quantity: 1000 } },
   ],
   [
     "new quote",
-    "Gupta Foods wala pichla order phir se bas 2000 box aur glued",
-    { intent: "repeat_request", target: "Gupta Foods", fields: { quantity: 2000, joint: "Glued" } },
+    "Gupta Foods wala pichla order phir se bas 2000 box",
+    { intent: "repeat_request", target: "Gupta Foods", fields: { quantity: 2000 } },
   ],
   [
     "quotation history",
     "Mehta Plastics ki history",
     { intent: "search", query: "Mehta Plastics" },
-  ],
-  [
-    "board",
-    "Gupta ke purane quotation dikhao",
-    { intent: "search", query: "Gupta" },
-  ],
-  [
-    "board",
-    "Sharma dhundo",
-    { intent: "search", query: "Sharma" },
   ],
   [
     "card REQ-003 Gupta Foods",
@@ -221,19 +149,9 @@ export const FEW_SHOTS: readonly [Screen, string, object][] = [
     { intent: "open", target: "REQ 2" },
   ],
   [
-    "new quote",
-    "Sharma Packaging ka card dikhao",
-    { intent: "open", target: "Sharma Packaging" },
-  ],
-  [
-    "board",
-    "Verma Sweets ka order mil gaya",
-    { intent: "set_stage", target: "Verma Sweets", stage: "Won" },
-  ],
-  [
     "card REQ-004 Mehta Plastics",
     "ye order nahi mila customer ne mana kar diya",
-    { intent: "set_stage", target: null, stage: "Lost" },
+    { intent: "set_stage", stage: "Lost" },
   ],
   [
     "board",
@@ -241,8 +159,6 @@ export const FEW_SHOTS: readonly [Screen, string, object][] = [
     { intent: "other" },
   ],
 ];
-
-const BLANK = { target: null, stage: null, query: null, filter: null, fields: {}, unclear: [] };
 
 function userMessage(screen: Screen, said: string): string {
   return `Screen: ${screen}\nSaid: ${said}`;
@@ -253,7 +169,7 @@ export function buildMessages(normalizedText: string, screen: Screen): ChatMessa
   const messages: ChatMessage[] = [{ role: "system", content: systemPrompt() }];
   for (const [shotScreen, input, output] of FEW_SHOTS) {
     messages.push({ role: "user", content: userMessage(shotScreen, input) });
-    messages.push({ role: "assistant", content: JSON.stringify({ ...BLANK, ...output }) });
+    messages.push({ role: "assistant", content: JSON.stringify(output) });
   }
   messages.push({ role: "user", content: userMessage(screen, normalizedText) });
   return messages;

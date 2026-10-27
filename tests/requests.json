@@ -1,0 +1,157 @@
+{
+  "about": "Dictated requests and the card each should produce. Replace these with real entries from the notebook. 'said' is the text as Wispr Flow types it. 'expect' lists EVERY field that was said, sizes in the unit spoken; any other field on the card counts as a failure (an invented value). Field keys are the ones in lib/fields.ts. 'missing' is optional: when given, the card's NOT SAID list must match it exactly.",
+  "requests": [
+    {
+      "id": "01-spec-example",
+      "said": "Sharma Packaging paanch sau box barah by das by aath inch paanch ply tees kilo load do colour print",
+      "expect": { "company": "Sharma Packaging", "quantity": 500, "length": 12, "breadth": 10, "height": 8, "dimUnit": "inch", "ply": 5, "loadKg": 30, "printColours": 2 },
+      "missing": ["address", "style", "flute", "joint"]
+    },
+    {
+      "id": "02-fillers-plain",
+      "said": "haan to Bansal Traders ka order hai uh teen hazaar box chahiye 8 by 6 by 4 inch teen ply plain box stitching wala",
+      "expect": { "company": "Bansal Traders", "quantity": 3000, "length": 8, "breadth": 6, "height": 4, "dimUnit": "inch", "ply": 3, "printColours": 0, "joint": "Stitched" }
+    },
+    {
+      "id": "03-mm-single-colour",
+      "said": "Kohli Foods 1200 boxes 350 by 250 by 200 mm 5 ply C flute 20 kg load single colour print glued",
+      "expect": { "company": "Kohli Foods", "quantity": 1200, "length": 350, "breadth": 250, "height": 200, "dimUnit": "mm", "ply": 5, "flute": "C", "loadKg": 20, "printColours": 1, "joint": "Glued" }
+    },
+    {
+      "id": "04-hindi-numbers-order",
+      "said": "Rathi Engineering ke liye saat ply ka box 600 by 400 by 400 mm load chalis kilo quantity dhai sau",
+      "expect": { "company": "Rathi Engineering", "ply": 7, "length": 600, "breadth": 400, "height": 400, "dimUnit": "mm", "loadKg": 40, "quantity": 250 },
+      "missing": ["address", "style", "flute", "printColours", "joint"]
+    },
+    {
+      "id": "05-cm-correction",
+      "said": "Patil Agro 40 by 30 by 25 centimetre 5 ply 2000 box nahi nahi 2500 box 15 kilo",
+      "expect": { "company": "Patil Agro", "length": 40, "breadth": 30, "height": 25, "dimUnit": "cm", "ply": 5, "quantity": 2500, "loadKg": 15 }
+    },
+    {
+      "id": "06-outer-diecut-lamination",
+      "said": "Mehra Exports outer size 20 by 16 by 14 inch 7 ply BC flute die cut 300 pieces 50 kg load 3 colour print lamination",
+      "expect": { "company": "Mehra Exports", "sizeType": "Outer", "length": 20, "breadth": 16, "height": 14, "dimUnit": "inch", "ply": 7, "flute": "BC", "style": "Die-cut", "quantity": 300, "loadKg": 50, "printColours": 3, "coating": "Lamination" }
+    },
+    {
+      "id": "07-inner-e-flute",
+      "said": "Joshi Pharma andar ka size 9 by 6 by 3 inch 3 ply E flute 5000 box 2 colour printing",
+      "expect": { "company": "Joshi Pharma", "sizeType": "Inner", "length": 9, "breadth": 6, "height": 3, "dimUnit": "inch", "ply": 3, "flute": "E", "quantity": 5000, "printColours": 2 }
+    },
+    {
+      "id": "08-description-words",
+      "said": "Gupta Sweets mithai ke dabbe 1000 piece 10 by 10 by 3 inch 3 ply plain",
+      "expect": { "company": "Gupta Sweets", "quantity": 1000, "length": 10, "breadth": 10, "height": 3, "dimUnit": "inch", "ply": 3, "printColours": 0 }
+    },
+    {
+      "id": "09-contact-phone",
+      "said": "naya order Agarwal Plastics ka contact Sunil ji 9822012345 1500 box 12 by 9 by 6 inch 5 ply 25 kilo",
+      "expect": { "company": "Agarwal Plastics", "contactPerson": "Sunil", "phone": "9822012345", "quantity": 1500, "length": 12, "breadth": 9, "height": 6, "dimUnit": "inch", "ply": 5, "loadKg": 25 }
+    },
+    {
+      "id": "10-gstin-rsc",
+      "said": "Shah Industries GST number 24AABCS1429B1ZB 800 box 450 by 350 by 300 mm 5 ply B flute RSC glued 30 kg",
+      "expect": { "company": "Shah Industries", "gstin": "24AABCS1429B1ZB", "quantity": 800, "length": 450, "breadth": 350, "height": 300, "dimUnit": "mm", "ply": 5, "flute": "B", "style": "RSC", "joint": "Glued", "loadKg": 30 }
+    },
+    {
+      "id": "11-customer-rate-ignored",
+      "said": "Reddy Electronics 2000 boxes 14 by 12 by 10 inch 5 ply customer ne bola rate 22 rupees tak chalega 4 colour print",
+      "expect": { "company": "Reddy Electronics", "quantity": 2000, "length": 14, "breadth": 12, "height": 10, "dimUnit": "inch", "ply": 5, "printColours": 4 }
+    },
+    {
+      "id": "12-english-number-words",
+      "said": "Verma Textiles twelve hundred boxes twenty by sixteen by twelve inch five ply forty kg load",
+      "expect": { "company": "Verma Textiles", "quantity": 1200, "length": 20, "breadth": 16, "height": 12, "dimUnit": "inch", "ply": 5, "loadKg": 40 }
+    },
+    {
+      "id": "13-stacking",
+      "said": "Kapoor Auto Parts 500 box 18 by 12 by 10 inch 7 ply 60 kilo load stacking 5 box upar upar",
+      "expect": { "company": "Kapoor Auto Parts", "quantity": 500, "length": 18, "breadth": 12, "height": 10, "dimUnit": "inch", "ply": 7, "loadKg": 60, "stacking": 5 }
+    },
+    {
+      "id": "14-wax",
+      "said": "Singh Dairy 3000 box 8 by 8 by 10 inch 5 ply wax coating 2 colour print 12 kilo",
+      "expect": { "company": "Singh Dairy", "quantity": 3000, "length": 8, "breadth": 8, "height": 10, "dimUnit": "inch", "ply": 5, "coating": "Wax", "printColours": 2, "loadKg": 12 }
+    },
+    {
+      "id": "15-gsm-bf-taped",
+      "said": "Malhotra Garments 700 boxes 24 by 18 by 12 inch 5 ply 150 GSM 18 BF taped",
+      "expect": { "company": "Malhotra Garments", "quantity": 700, "length": 24, "breadth": 18, "height": 12, "dimUnit": "inch", "ply": 5, "gsm": 150, "bf": 18, "joint": "Taped" }
+    },
+    {
+      "id": "16-partitions-bursting",
+      "said": "Desai Ceramics 6 khane ka partition chahiye 400 box 16 by 12 by 10 inch 7 ply bursting strength 14",
+      "expect": { "company": "Desai Ceramics", "partitions": "6 khane", "quantity": 400, "length": 16, "breadth": 12, "height": 10, "dimUnit": "inch", "ply": 7, "burstingStrength": 14 }
+    },
+    {
+      "id": "17-ten-thousand",
+      "said": "Iyer Spices 10000 box 6 by 4 by 4 inch 3 ply 1 colour print stitched E flute",
+      "expect": { "company": "Iyer Spices", "quantity": 10000, "length": 6, "breadth": 4, "height": 4, "dimUnit": "inch", "ply": 3, "printColours": 1, "joint": "Stitched", "flute": "E" }
+    },
+    {
+      "id": "18-dedh-hazaar",
+      "said": "Chopra Medicals dedh hazaar box 7 by 5 by 4 inch teen ply",
+      "expect": { "company": "Chopra Medicals", "quantity": 1500, "length": 7, "breadth": 5, "height": 4, "dimUnit": "inch", "ply": 3 }
+    },
+    {
+      "id": "19-colour-correction",
+      "said": "Bhatia Toys 250 box 22 by 15 by 15 inch 5 ply 3 colour print nahi 4 colour print die cut",
+      "expect": { "company": "Bhatia Toys", "quantity": 250, "length": 22, "breadth": 15, "height": 15, "dimUnit": "inch", "ply": 5, "printColours": 4, "style": "Die-cut" }
+    },
+    {
+      "id": "20-address",
+      "said": "Mishra Foods ka order 900 box 300 by 200 by 100 mm 5 ply B flute address plot 45 Wagle Estate Thane",
+      "expect": { "company": "Mishra Foods", "quantity": 900, "length": 300, "breadth": 200, "height": 100, "dimUnit": "mm", "ply": 5, "flute": "B", "address": "Plot 45 Wagle Estate Thane" }
+    },
+    {
+      "id": "21-joint-glue-se",
+      "said": "Thakur Hardware 1000 box 12 by 10 by 8 inch 5 ply 35 kilo load uh joint glue se",
+      "expect": { "company": "Thakur Hardware", "quantity": 1000, "length": 12, "breadth": 10, "height": 8, "dimUnit": "inch", "ply": 5, "loadKg": 35, "joint": "Glued" }
+    },
+    {
+      "id": "22-hsc",
+      "said": "Arora Packers 2 hazaar box 16 by 12 by 8 inch 5 ply HSC 20 kg",
+      "expect": { "company": "Arora Packers", "quantity": 2000, "length": 16, "breadth": 12, "height": 8, "dimUnit": "inch", "ply": 5, "style": "HSC", "loadKg": 20 }
+    },
+    {
+      "id": "23-phone-then-contact",
+      "said": "Saxena Chemicals 600 box 14 by 14 by 14 inch 7 ply 45 kilo phone 9811122233 contact Rajesh",
+      "expect": { "company": "Saxena Chemicals", "quantity": 600, "length": 14, "breadth": 14, "height": 14, "dimUnit": "inch", "ply": 7, "loadKg": 45, "phone": "9811122233", "contactPerson": "Rajesh" }
+    },
+    {
+      "id": "24-wax-plain-mm",
+      "said": "Pillai Fisheries 1500 box 500 by 300 by 250 mm 5 ply wax coating 20 kg load plain",
+      "expect": { "company": "Pillai Fisheries", "quantity": 1500, "length": 500, "breadth": 300, "height": 250, "dimUnit": "mm", "ply": 5, "coating": "Wax", "loadKg": 20, "printColours": 0 }
+    },
+    {
+      "id": "25-tray",
+      "said": "Tiwari Stationery 5000 box 11 by 8 by 2 inch 3 ply E flute tray type 2 colour print",
+      "expect": { "company": "Tiwari Stationery", "quantity": 5000, "length": 11, "breadth": 8, "height": 2, "dimUnit": "inch", "ply": 3, "flute": "E", "style": "Tray", "printColours": 2 }
+    },
+    {
+      "id": "26-bahar-ka-size",
+      "said": "Khanna Electricals 800 box 20 by 15 by 10 inch 5 ply 25 kg load bahar ka size",
+      "expect": { "company": "Khanna Electricals", "quantity": 800, "length": 20, "breadth": 15, "height": 10, "dimUnit": "inch", "ply": 5, "loadKg": 25, "sizeType": "Outer" }
+    },
+    {
+      "id": "27-ply-sorry",
+      "said": "Nair Cashew 1000 box 15 by 10 by 10 inch 5 ply sorry 7 ply 30 kilo",
+      "expect": { "company": "Nair Cashew", "quantity": 1000, "length": 15, "breadth": 10, "height": 10, "dimUnit": "inch", "ply": 7, "loadKg": 30 }
+    },
+    {
+      "id": "28-telescopic",
+      "said": "Goyal Steel 200 box 30 by 20 by 20 inch 7 ply 80 kg load stitched telescopic",
+      "expect": { "company": "Goyal Steel", "quantity": 200, "length": 30, "breadth": 20, "height": 20, "dimUnit": "inch", "ply": 7, "loadKg": 80, "joint": "Stitched", "style": "Telescopic" }
+    },
+    {
+      "id": "29-varnish",
+      "said": "Pandey Bakery 4000 box 10 by 10 by 4 inch 3 ply 1 colour print varnish",
+      "expect": { "company": "Pandey Bakery", "quantity": 4000, "length": 10, "breadth": 10, "height": 4, "dimUnit": "inch", "ply": 3, "printColours": 1, "coating": "Varnish" }
+    },
+    {
+      "id": "30-inner-glued-mm",
+      "said": "Rao Pharma 3000 box 200 by 150 by 100 mm 3 ply B flute 2 colour print andar ka size glued 10 kilo",
+      "expect": { "company": "Rao Pharma", "quantity": 3000, "length": 200, "breadth": 150, "height": 100, "dimUnit": "mm", "ply": 3, "flute": "B", "printColours": 2, "sizeType": "Inner", "joint": "Glued", "loadKg": 10 }
+    }
+  ]
+}
