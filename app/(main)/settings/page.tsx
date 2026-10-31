@@ -3,6 +3,9 @@ import CompanyForm from "@/components/CompanyForm";
 import { slab } from "@/lib/fonts";
 import { getCompany } from "@/lib/settings";
 
+// Read from the database on every visit, never fixed at build time.
+export const dynamic = "force-dynamic";
+
 // Your company: the letterhead on every quotation.
 export default async function SettingsPage() {
   const company = await getCompany();
