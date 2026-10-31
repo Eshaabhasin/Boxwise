@@ -1,36 +1,24 @@
-const STEPS = ["Request card", "Rate by voice", "Approve", "Send"] as const;
-const SHORT = ["Card", "Rate", "Approve", "Send"] as const;
+const STEPS = ["Enquiry", "Rates", "Approve", "Send"] as const;
 
-/** The four-step tracker from the reference PDF. `current` is 1-based. */
-export default function Steps({ current }: { current: 1 | 2 | 3 | 4 }) {
+/** Where a quotation is: enquiry → rates → approve → send. `current` is 1-based; 5 means all done (sent). */
+export default function Steps({ current }: { current: 1 | 2 | 3 | 4 | 5 }) {
   return (
-    <ol className="grid grid-cols-4 gap-2 md:gap-4">
+    <ol className="flex items-center gap-2 text-sm">
       {STEPS.map((label, i) => {
         const n = i + 1;
         const done = n < current;
         const active = n === current;
-        const box = done
-          ? "border-ink bg-ink text-cream"
-          : active
-            ? "hard-shadow border-ink bg-brick text-cream"
-            : "border-dashed border-ink text-ink";
         return (
-          <li
-            key={label}
-            aria-current={active ? "step" : undefined}
-            className={`flex flex-col items-center gap-1 border-2 px-2 py-2.5 md:flex-row md:gap-3 md:px-3 ${box}`}
-          >
+          <li key={label} aria-current={active ? "step" : undefined} className="flex items-center gap-2">
             <span
-              className={`flex h-6 w-6 shrink-0 items-center justify-center border-2 font-mono text-xs font-bold ${
-                done || active ? "border-cream" : "border-ink"
+              className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${
+                done ? "bg-ok text-white" : active ? "bg-brand text-white" : "border border-line-strong text-ink-3"
               }`}
             >
               {done ? "✓" : n}
             </span>
-            <span className="font-display text-xs font-extrabold uppercase tracking-[0.015em] md:text-base">
-              <span className="md:hidden">{SHORT[i]}</span>
-              <span className="hidden md:inline">{label}</span>
-            </span>
+            <span className={`hidden font-medium sm:inline ${active ? "text-ink" : "text-ink-3"}`}>{label}</span>
+            {n < STEPS.length && <span className="mx-1 h-px w-6 bg-line-strong sm:w-10" aria-hidden="true" />}
           </li>
         );
       })}

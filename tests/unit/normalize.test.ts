@@ -60,6 +60,28 @@ describe("words that are not always numbers", () => {
   });
 });
 
+describe("numbers typed with commas (user report: “quantity is 1,000” was not read)", () => {
+  // Regression: Wispr Flow types "1,000"; the guard saw 1 and 0 and dropped quantity 1000.
+  it.each([
+    ["quantity is 1,000", "quantity is 1000"],
+    ["10,000 box", "10000 box"],
+    ["1,00,000 box", "100000 box"],
+    ["2,50,000", "250000"],
+    ["1,234,567", "1234567"],
+    ["rate 1,250.50", "rate 1250.50"],
+  ])("%s -> %s", (input, expected) => {
+    expect(normalize(input)).toBe(expected);
+  });
+
+  it("leaves two numbers separated by a comma alone", () => {
+    expect(normalize("12,10 box")).toBe("12,10 box");
+  });
+
+  it("lets the guard accept the quantity", () => {
+    expect([...numbersIn(normalize("quantity is 1,000"))]).toEqual([1000]);
+  });
+});
+
 describe("dictation clean-up", () => {
   it("splits 12x10x8 and glued units", () => {
     expect(normalize("12x10x8 inch 5ply 30kg")).toBe("12 by 10 by 8 inch 5 ply 30 kg");

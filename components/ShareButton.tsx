@@ -89,7 +89,7 @@ export default function ShareButton({ quotationId, fileName, pdfUrl, publicPdfUr
       }
       await record("link");
       setState("idle");
-      setNote("WhatsApp opened with the message and a PDF link. The card is now Sent.");
+      setNote("Opened with the message and a PDF link. The card is now Sent.");
     },
     [message, phone, publicPdfUrl, record],
   );
@@ -108,13 +108,11 @@ export default function ShareButton({ quotationId, fileName, pdfUrl, publicPdfUr
         type="button"
         onClick={() => void send(false)}
         disabled={state === "busy"}
-        className={`hard-shadow border-2 border-ink bg-brick px-5 py-3 font-display text-lg font-extrabold uppercase tracking-[0.015em] text-cream disabled:opacity-60 ${
-          state === "tap" ? "ring-4 ring-brick/40" : ""
-        }`}
+        className={`btn btn-primary w-full ${state === "tap" ? "ring-4 ring-brand/30" : ""}`}
       >
-        {state === "busy" ? "Opening…" : sent ? "Send again on WhatsApp" : "Send on WhatsApp"}
+        {state === "busy" ? "Opening…" : sent ? "Send again" : "Send"}
       </button>
-      {state === "tap" && <p className="text-sm font-medium text-brick">Your phone needs one tap to open WhatsApp. Tap the button above.</p>}
+      {state === "tap" && <p className="text-sm font-medium text-warn">Your phone needs one tap to send. Tap the button above.</p>}
       {note && <p className="text-sm text-ink-2">{note}</p>}
     </div>
   );

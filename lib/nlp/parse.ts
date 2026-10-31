@@ -32,8 +32,10 @@ export interface ParseResult {
   command: LlmCommandOutput | null;
   /** Raw reply(ies) from the LLM, for parseLogs. */
   llmRaw: string;
-  /** Field values after the guard, for create_request and edit_request. */
+  /** Top-level field values after the guard (customer, GST, terms; a single box's fields may be here too). */
   request: GuardedRequest | null;
+  /** Each box said, after the guard: which box (number, "new", or null = the only one) and its values. */
+  boxes: { box: number | "new" | null; guarded: GuardedRequest }[];
   unclear: string[];
   error: string | null;
   latencyMs: number;
@@ -103,10 +105,10 @@ export async function parseCommand(text: string, llm: LlmClient, opts: ParseOpti
   }
 
   const hasFields = command && ["create_request", "repeat_request", "edit_request", "set_rate"].includes(command.intent);
-  const request =
-    hasFields && command
-      ? guardRequestFields(command.fields, heardText, { defaultUnit: opts.defaultUnit, allowRate: command.intent === "set_rate" })
-      : null;
+  const guardOpts = { defaultUnit: opts.defaultUnit, allowRate: command?.intent === "set_rate" };
+  const request = hasFields && command ? guardRequestFields(command.fields, heardText, guardOpts) : null;
+  const boxes =
+    hasFields && command ? command.boxes.map((b) => ({ box: b.box, guarded: guardRequestFields(b.fields, heardText, guardOpts) })) : [];
   return {
     normalized,
     heardText,
@@ -114,6 +116,7 @@ export async function parseCommand(text: string, llm: LlmClient, opts: ParseOpti
     command,
     llmRaw: raws.join("\n---retry---\n"),
     request,
+    boxes,
     unclear,
     error,
     latencyMs: Date.now() - started,

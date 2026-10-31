@@ -1,13 +1,12 @@
 import path from "node:path";
 import type { Style } from "@react-pdf/types";
 import { Document, Font, Page, StyleSheet, Text, View, renderToBuffer } from "@react-pdf/renderer";
-import { display } from "@/lib/commands/plan";
-import { COMPANY } from "@/lib/company";
-import { FIELD_DEFS, type FieldKey, type Specs } from "@/lib/fields";
+import { letterheadLines, type CompanyProfile } from "@/lib/company";
 
 /**
- * The quotation PDF, drawn from the frozen snapshot only, so the same
- * quotation always produces the same PDF. Money comes in as paise.
+ * The quotation PDF: a plain business document with one line per box.
+ * Drawn only from the stored quotation, so the same quotation always gives
+ * the same PDF. Money comes in as paise.
  */
 
 const FONT_DIR = path.join(process.cwd(), "lib", "pdf", "fonts");
@@ -30,10 +29,16 @@ function registerFonts() {
       { src: path.join(FONT_DIR, "inter-latin-ext-700-normal.woff"), fontWeight: 700 },
     ],
   });
-  Font.register({ family: "InterTight", src: path.join(FONT_DIR, "inter-tight-latin-800-normal.woff"), fontWeight: 800 });
-  Font.register({ family: "Mono", src: path.join(FONT_DIR, "jetbrains-mono-latin-400-normal.woff") });
   Font.registerHyphenationCallback((word) => [word]);
   fontsReady = true;
+}
+
+export interface QuotationPdfLine {
+  title: string;
+  detail: string;
+  quantity: number;
+  ratePaise: number;
+  amountPaise: number;
 }
 
 export interface QuotationPdfData {
@@ -41,9 +46,7 @@ export interface QuotationPdfData {
   status: "Draft" | "Approved" | "Sent";
   date: Date;
   customerSnapshot: { company: string; contactPerson?: string; phone?: string; gstin?: string; address?: string };
-  specsSnapshot: Specs;
-  quantity: number;
-  ratePaise: number;
+  lines: QuotationPdfLine[];
   subtotalPaise: number;
   gstPercent: number;
   gstMode: "intra" | "inter";
@@ -53,36 +56,35 @@ export interface QuotationPdfData {
   roundOffPaise: number;
   totalPaise: number;
   terms: { deliveryTime: string; paymentTerms: string; validity: string };
-  itemTitle: string;
-  itemDetail: string;
+  notes?: string;
 }
 
-const INK = "#2a1a10";
-const MUTED = "#6b5440";
-const BRICK = "#9c2f1c";
-const RULE = "#d9c7a5";
+const INK = "#1c1917";
+const MUTED = "#6b625a";
+const RULE = "#e7e2dc";
+const SHADE = "#f6f3ef";
+const ACCENT = "#8a4b1c";
 
 const s = StyleSheet.create({
-  page: { fontFamily: "Inter", fontSize: 9.5, color: INK, paddingTop: 40, paddingBottom: 56, paddingHorizontal: 44, lineHeight: 1.35 },
-  row: { flexDirection: "row" },
+  page: { fontFamily: "Inter", fontSize: 9, color: INK, paddingTop: 36, paddingBottom: 56, paddingHorizontal: 40, lineHeight: 1.4 },
   between: { flexDirection: "row", justifyContent: "space-between" },
-  company: { fontFamily: "InterTight", fontWeight: 800, fontSize: 17, textTransform: "uppercase", lineHeight: 1.15 },
-  mono: { fontFamily: "Mono", fontSize: 7.5, color: MUTED },
-  title: { fontFamily: "InterTight", fontWeight: 800, fontSize: 22, color: BRICK, textAlign: "right", lineHeight: 1.15, marginBottom: 4 },
-  label: { fontFamily: "Mono", fontSize: 7, color: MUTED, textTransform: "uppercase", letterSpacing: 0.8 },
-  hr: { borderBottomWidth: 1.5, borderBottomColor: INK, marginVertical: 14 },
-  th: { fontFamily: "Mono", fontSize: 7, color: MUTED, textTransform: "uppercase", paddingVertical: 5 },
-  cell: { paddingVertical: 8 },
+  bar: { height: 4, backgroundColor: ACCENT, marginBottom: 22 },
+  company: { fontSize: 16, fontWeight: 700, lineHeight: 1.2 },
+  muted: { color: MUTED },
+  small: { fontSize: 8, color: MUTED },
+  title: { fontSize: 20, fontWeight: 700, color: ACCENT, textAlign: "right", lineHeight: 1.2, letterSpacing: 1 },
+  label: { fontSize: 7, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6 },
+  box: { borderWidth: 0.75, borderColor: RULE, borderRadius: 4, padding: 10 },
+  th: { fontSize: 7, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, paddingVertical: 6, paddingHorizontal: 6 },
+  td: { paddingVertical: 7, paddingHorizontal: 6 },
   right: { textAlign: "right" },
   bold: { fontWeight: 700 },
-  watermark: { position: "absolute", top: 330, left: 90, fontFamily: "InterTight", fontWeight: 800, fontSize: 110, color: "#f1e6d2", transform: "rotate(-24deg)" },
-  footer: { position: "absolute", bottom: 24, left: 44, right: 44, fontFamily: "Mono", fontSize: 7, color: MUTED, textAlign: "center" },
+  watermark: { position: "absolute", top: 320, left: 110, fontSize: 96, fontWeight: 700, color: "#efe9e2", transform: "rotate(-24deg)" },
+  footer: { position: "absolute", bottom: 24, left: 40, right: 40, fontSize: 7, color: MUTED, flexDirection: "row", justifyContent: "space-between" },
 });
 
 /** "₹10,620.00" with the ₹ drawn from the font that has it. */
-type TextStyle = Style | Style[];
-
-function Money({ paise, style }: { paise: number; style?: TextStyle }) {
+function Money({ paise, style }: { paise: number; style?: Style | Style[] }) {
   const sign = paise < 0 ? "-" : "";
   const abs = Math.abs(paise);
   const body = `${Math.floor(abs / 100).toLocaleString("en-IN")}.${String(abs % 100).padStart(2, "0")}`;
@@ -96,140 +98,153 @@ function Money({ paise, style }: { paise: number; style?: TextStyle }) {
 }
 
 function TotalRow({ label, paise, big }: { label: string; paise: number; big?: boolean }) {
-  const amount: Style = big ? { fontWeight: 700, fontSize: 14 } : {};
+  const row: Style[] = [s.between, { paddingVertical: big ? 7 : 3, paddingHorizontal: 6 }];
+  if (big) row.push({ backgroundColor: SHADE, marginTop: 4, borderTopWidth: 1, borderTopColor: INK });
   return (
-    <View style={[s.between, { paddingVertical: big ? 6 : 3 }, big ? { borderTopWidth: 1.5, borderTopColor: INK, marginTop: 4 } : {}]}>
-      <Text style={big ? { fontFamily: "InterTight", fontWeight: 800, fontSize: 12, textTransform: "uppercase" } : {}}>{label}</Text>
-      <Money paise={paise} style={amount} />
+    <View style={row}>
+      <Text style={big ? s.bold : s.muted}>{label}</Text>
+      <Money paise={paise} style={big ? { fontWeight: 700, fontSize: 11 } : {}} />
     </View>
   );
 }
 
-function SpecGrid({ specs }: { specs: Specs }) {
-  const rows = FIELD_DEFS.filter((f) => f.onPdf && f.group !== "commercial" && f.kind !== "length").flatMap((f) => {
-    const v = specs[f.key as FieldKey];
-    return v === undefined || v === null || v === "" ? [] : [{ label: f.label, value: display(f.key as FieldKey, v, specs) }];
-  });
-  if (rows.length === 0) return null;
-  return (
-    <View style={{ marginTop: 18 }}>
-      <Text style={s.label}>Specification</Text>
-      <View style={[s.row, { flexWrap: "wrap", marginTop: 6, borderTopWidth: 0.75, borderTopColor: RULE }]}>
-        {rows.map((r) => (
-          <View key={r.label} style={{ width: "33.33%", paddingVertical: 5, paddingRight: 8, borderBottomWidth: 0.75, borderBottomColor: RULE }}>
-            <Text style={[s.label, { fontSize: 6.5 }]}>{r.label}</Text>
-            <Text style={s.bold}>{r.value}</Text>
-          </View>
-        ))}
-      </View>
-    </View>
-  );
-}
+const COL = { n: 22, qty: 56, rate: 70, amount: 82 };
 
-function QuotationDocument({ q }: { q: QuotationPdfData }) {
+function QuotationDocument({ q, company: COMPANY }: { q: QuotationPdfData; company: CompanyProfile }) {
   const c = q.customerSnapshot;
   const date = q.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" });
-  const number = q.status === "Draft" ? `DRAFT${q.number ? ` (${q.number})` : ""}` : (q.number ?? "");
+  const number = q.number ?? "Draft";
   const half = q.gstPercent / 2;
-  const companyLine = [COMPANY.addressLines.join(", "), COMPANY.phone, COMPANY.email, COMPANY.gstin ? `GSTIN ${COMPANY.gstin}` : ""]
-    .filter(Boolean)
-    .join("  ·  ");
-  const bank = COMPANY.bank;
+  const companyLines = letterheadLines(COMPANY);
 
   return (
-    <Document title={`Quotation ${q.number ?? "draft"} - ${c.company}`} author={COMPANY.name} creator="BoxBol">
+    <Document title={`Quotation ${number} - ${c.company}`} author={COMPANY.name} creator="Boxwise">
       <Page size="A4" style={s.page}>
-        {q.status === "Draft" && <Text style={s.watermark} fixed>DRAFT</Text>}
+        {q.status === "Draft" && (
+          <Text style={s.watermark} fixed>
+            DRAFT
+          </Text>
+        )}
+        <View style={s.bar} fixed />
 
         <View style={s.between}>
-          <View style={{ width: "62%" }}>
+          <View style={{ width: "58%" }}>
             <Text style={s.company}>{COMPANY.name}</Text>
-            <Text style={[s.mono, { marginTop: 4 }]}>{companyLine}</Text>
+            {companyLines.map((l) => (
+              <Text key={l} style={[s.small, { marginTop: 2 }]}>
+                {l}
+              </Text>
+            ))}
           </View>
           <View style={{ alignItems: "flex-end" }}>
             <Text style={s.title}>QUOTATION</Text>
-            <Text style={[s.mono, s.right, { marginTop: 3 }]}>No. {number}</Text>
-            <Text style={[s.mono, s.right]}>{date}</Text>
-          </View>
-        </View>
-
-        <View style={s.hr} />
-
-        <Text style={s.label}>Quotation for</Text>
-        <Text style={{ fontFamily: "InterTight", fontWeight: 800, fontSize: 13, textTransform: "uppercase", marginTop: 2, marginBottom: 3, lineHeight: 1.15 }}>{c.company}</Text>
-        {c.contactPerson && <Text>Attn: {c.contactPerson}</Text>}
-        {c.address && <Text>{c.address}</Text>}
-        {(c.phone || c.gstin) && (
-          <Text style={s.mono}>{[c.phone ? `Phone ${c.phone}` : "", c.gstin ? `GSTIN ${c.gstin}` : ""].filter(Boolean).join("  ·  ")}</Text>
-        )}
-
-        <View style={{ marginTop: 18 }}>
-          <View style={[s.row, { borderTopWidth: 0.75, borderBottomWidth: 0.75, borderColor: MUTED }]}>
-            <Text style={[s.th, { flex: 3.2 }]}>Item</Text>
-            <Text style={[s.th, s.right, { flex: 0.9 }]}>Qty</Text>
-            <Text style={[s.th, s.right, { flex: 1.1 }]}>Rate</Text>
-            <Text style={[s.th, s.right, { flex: 1.4 }]}>Amount</Text>
-          </View>
-          <View style={[s.row, { borderBottomWidth: 0.75, borderBottomColor: RULE }]}>
-            <View style={[s.cell, { flex: 3.2, paddingRight: 8 }]}>
-              <Text style={s.bold}>{q.itemTitle}</Text>
-              {q.itemDetail && <Text style={[s.mono, { marginTop: 2 }]}>{q.itemDetail}</Text>}
+            <View style={{ marginTop: 6, alignItems: "flex-end" }}>
+              <Text>
+                <Text style={s.muted}>No. </Text>
+                <Text style={s.bold}>{number}</Text>
+              </Text>
+              <Text>
+                <Text style={s.muted}>Date </Text>
+                {date}
+              </Text>
+              {q.terms.validity !== "—" && (
+                <Text>
+                  <Text style={s.muted}>Valid for </Text>
+                  {q.terms.validity}
+                </Text>
+              )}
             </View>
-            <Text style={[s.cell, s.right, { flex: 0.9 }]}>{q.quantity.toLocaleString("en-IN")}</Text>
-            <Money paise={q.ratePaise} style={[s.cell, s.right, { flex: 1.1 }]} />
-            <Money paise={q.subtotalPaise} style={[s.cell, s.right, { flex: 1.4 }]} />
           </View>
         </View>
 
-        <View style={{ marginLeft: "auto", width: 230, marginTop: 10 }}>
-          <TotalRow label="Subtotal" paise={q.subtotalPaise} />
-          {q.gstMode === "intra" ? (
-            <>
-              <TotalRow label={`CGST ${half}%`} paise={q.cgstPaise} />
-              <TotalRow label={`SGST ${half}%`} paise={q.sgstPaise} />
-            </>
-          ) : (
-            <TotalRow label={`IGST ${q.gstPercent}%`} paise={q.igstPaise} />
-          )}
-          {q.roundOffPaise !== 0 && <TotalRow label="Round off" paise={q.roundOffPaise} />}
-          <TotalRow label="Total" paise={q.totalPaise} big />
+        <View style={[s.box, { marginTop: 20, width: "60%" }]}>
+          <Text style={s.label}>Quotation for</Text>
+          <Text style={[s.bold, { fontSize: 11, marginTop: 3 }]}>{c.company}</Text>
+          {c.contactPerson && <Text>Attn: {c.contactPerson}</Text>}
+          {c.address && <Text style={s.muted}>{c.address}</Text>}
+          {(c.phone || c.gstin) && <Text style={s.small}>{[c.phone ? `Phone ${c.phone}` : "", c.gstin ? `GSTIN ${c.gstin}` : ""].filter(Boolean).join("  ·  ")}</Text>}
         </View>
-
-        <SpecGrid specs={q.specsSnapshot} />
 
         <View style={{ marginTop: 18 }}>
-          <Text style={s.label}>Terms</Text>
-          <Text style={{ marginTop: 4 }}>Delivery: {q.terms.deliveryTime}</Text>
-          <Text>Payment: {q.terms.paymentTerms}</Text>
-          <Text>Valid for: {q.terms.validity}</Text>
-        </View>
-
-        {bank.accountNumber && (
-          <View style={{ marginTop: 14 }}>
-            <Text style={s.label}>Bank details</Text>
-            <Text style={[s.mono, { marginTop: 3 }]}>
-              {[bank.accountName, bank.name, `A/c ${bank.accountNumber}`, bank.ifsc ? `IFSC ${bank.ifsc}` : ""].filter(Boolean).join("  ·  ")}
-            </Text>
+          <View style={{ flexDirection: "row", backgroundColor: SHADE, borderTopWidth: 1, borderBottomWidth: 0.75, borderTopColor: INK, borderBottomColor: RULE }} fixed>
+            <Text style={[s.th, { width: COL.n }]}>#</Text>
+            <Text style={[s.th, { flex: 1 }]}>Description</Text>
+            <Text style={[s.th, s.right, { width: COL.qty }]}>Qty</Text>
+            <Text style={[s.th, s.right, { width: COL.rate }]}>Rate</Text>
+            <Text style={[s.th, s.right, { width: COL.amount }]}>Amount</Text>
           </View>
-        )}
-
-        <View style={{ marginTop: 36, width: 180 }}>
-          <Text>For {COMPANY.name}</Text>
-          <View style={{ borderBottomWidth: 0.75, borderBottomColor: INK, marginTop: 30 }} />
-          <Text style={[s.mono, { marginTop: 3 }]}>Authorised signatory</Text>
+          {q.lines.map((l, i) => (
+            <View key={i} style={{ flexDirection: "row", borderBottomWidth: 0.75, borderBottomColor: RULE }} wrap={false}>
+              <Text style={[s.td, s.muted, { width: COL.n }]}>{i + 1}</Text>
+              <View style={[s.td, { flex: 1 }]}>
+                <Text style={s.bold}>{l.title}</Text>
+                {l.detail ? <Text style={[s.small, { marginTop: 2 }]}>{l.detail}</Text> : null}
+              </View>
+              <Text style={[s.td, s.right, { width: COL.qty }]}>{l.quantity.toLocaleString("en-IN")}</Text>
+              <Money paise={l.ratePaise} style={[s.td, s.right, { width: COL.rate }]} />
+              <Money paise={l.amountPaise} style={[s.td, s.right, { width: COL.amount }]} />
+            </View>
+          ))}
         </View>
 
-        <Text style={s.footer} fixed>
-          {q.number ? `Quotation ${q.number}` : "Draft quotation"} · {c.company}
-        </Text>
+        <View style={{ flexDirection: "row", marginTop: 12 }} wrap={false}>
+          <View style={{ flex: 1, paddingRight: 24 }}>
+            <Text style={s.label}>Terms</Text>
+            <Text style={{ marginTop: 4 }}>
+              <Text style={s.muted}>Delivery: </Text>
+              {q.terms.deliveryTime}
+            </Text>
+            <Text>
+              <Text style={s.muted}>Payment: </Text>
+              {q.terms.paymentTerms}
+            </Text>
+            <Text>
+              <Text style={s.muted}>Valid for: </Text>
+              {q.terms.validity}
+            </Text>
+            {q.notes ? (
+              <>
+                <Text style={[s.label, { marginTop: 10 }]}>Notes</Text>
+                <Text style={{ marginTop: 3 }}>{q.notes}</Text>
+              </>
+            ) : null}
+          </View>
+          <View style={{ width: 220 }}>
+            <TotalRow label="Subtotal" paise={q.subtotalPaise} />
+            {q.gstMode === "intra" ? (
+              <>
+                <TotalRow label={`CGST ${half}%`} paise={q.cgstPaise} />
+                <TotalRow label={`SGST ${half}%`} paise={q.sgstPaise} />
+              </>
+            ) : (
+              <TotalRow label={`IGST ${q.gstPercent}%`} paise={q.igstPaise} />
+            )}
+            {q.roundOffPaise !== 0 && <TotalRow label="Round off" paise={q.roundOffPaise} />}
+            <TotalRow label="Total" paise={q.totalPaise} big />
+          </View>
+        </View>
+
+        <View style={{ marginTop: 34, alignItems: "flex-end" }} wrap={false}>
+          <Text>For {COMPANY.name}</Text>
+          <View style={{ borderBottomWidth: 0.75, borderBottomColor: INK, width: 170, marginTop: 30 }} />
+          <Text style={[s.small, { marginTop: 3 }]}>Authorised signatory</Text>
+        </View>
+
+        <View style={s.footer} fixed>
+          <Text>
+            {COMPANY.name} · Quotation {number}
+          </Text>
+          <Text render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
+        </View>
       </Page>
     </Document>
   );
 }
 
-export async function renderQuotationPdf(q: QuotationPdfData): Promise<Buffer> {
+/** @param company  your letterhead (a sent quotation passes the one it was sent with) */
+export async function renderQuotationPdf(q: QuotationPdfData, company: CompanyProfile): Promise<Buffer> {
   registerFonts();
-  return renderToBuffer(<QuotationDocument q={q} />);
+  return renderToBuffer(<QuotationDocument q={q} company={company} />);
 }
 
 export { pdfFileName } from "@/lib/quote/share";

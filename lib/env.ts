@@ -10,8 +10,6 @@ const EnvSchema = z.object({
   LLM_PROVIDER: z.enum(["groq", "ollama"]).default("groq"),
   OLLAMA_BASE_URL: z.string().default("http://localhost:11434"),
   OLLAMA_MODEL: z.string().default("llama3.1:8b"),
-  APP_PASSCODE: z.string().min(4, "APP_PASSCODE must be at least 4 characters"),
-  SESSION_SECRET: z.string().min(32, "SESSION_SECRET must be at least 32 characters"),
   PUBLIC_BASE_URL: z.string().default("http://localhost:3000"),
 });
 

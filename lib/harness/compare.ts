@@ -1,18 +1,25 @@
 import { z } from "zod";
+import { cardMissing } from "@/lib/card";
 import { fromMm, isLengthUnit } from "@/lib/calc/units";
-import { getField, missingFields, type FieldKey, type SpecValue, type Specs } from "@/lib/fields";
-import type { GuardedRequest } from "@/lib/nlp/guard";
+import type { NewCard } from "@/lib/commands/changes";
+import { getField, type FieldKey, type SpecValue, type Specs } from "@/lib/fields";
+import type { Dropped } from "@/lib/nlp/guard";
 
 /**
- * Compares the card the pipeline made with the card a request should make.
+ * Compares the enquiry the pipeline made with the one a request should make.
  * Every expected field must match, and any other field is a failure too:
  * a value nobody said is an invented value (golden rule 2).
  */
 
+const Expected = z.record(z.string(), z.union([z.string(), z.number()]));
+
 export const HarnessCase = z.object({
   id: z.string(),
   said: z.string(),
-  expect: z.record(z.string(), z.union([z.string(), z.number()])),
+  /** Customer fields, GST and terms; for a one-box request also the box's fields. */
+  expect: Expected,
+  /** For a request with several boxes: each box's fields, in order (shared ones like "sab 5 ply" included). */
+  boxes: z.array(Expected).optional(),
   missing: z.array(z.string()).optional(),
 });
 export type HarnessCase = z.infer<typeof HarnessCase>;
@@ -22,16 +29,15 @@ export const HarnessFile = z.object({
   requests: z.array(HarnessCase).min(1),
 });
 
-/** A card in the units it was spoken in (sizes back from mm), for comparing with the expected card. */
-export function spokenCard(g: GuardedRequest): Record<string, SpecValue> {
-  const card: Record<string, SpecValue> = { ...g.customer };
-  const unit = isLengthUnit(g.specs.dimUnit) ? g.specs.dimUnit : null;
-  for (const [k, v] of Object.entries(g.specs) as [FieldKey, SpecValue][]) {
+/** Values in the units they were spoken in (sizes back from mm), for comparing with the expected card. */
+export function spokenSpecs(specs: Specs): Record<string, SpecValue> {
+  const out: Record<string, SpecValue> = {};
+  const unit = isLengthUnit(specs.dimUnit) ? specs.dimUnit : null;
+  for (const [k, v] of Object.entries(specs) as [FieldKey, SpecValue][]) {
     if (v === undefined) continue;
-    card[k] = getField(k)?.kind === "length" && typeof v === "number" && unit ? fromMm(v, unit) : v;
+    out[k] = getField(k)?.kind === "length" && typeof v === "number" && unit ? fromMm(v, unit) : v;
   }
-  if (g.sizeWithoutUnit) Object.assign(card, g.sizeWithoutUnit);
-  return card;
+  return out;
 }
 
 function words(v: unknown): string {
@@ -44,6 +50,20 @@ function same(key: string, expected: string | number, actual: SpecValue): boolea
   // Text compares on its words: "Plot 45, Wagle Estate" equals "plot 45 wagle estate".
   if (key === "phone" || key === "gstin") return String(actual).replace(/\W/g, "").toUpperCase() === expected.replace(/\W/g, "").toUpperCase();
   return words(actual) === words(expected);
+}
+
+function compareValues(prefix: string, expected: Record<string, string | number>, actual: Record<string, SpecValue>, problems: string[]): void {
+  for (const [k, want] of Object.entries(expected)) {
+    const got = actual[k];
+    if (got === undefined) problems.push(`${prefix}${k}: expected ${JSON.stringify(want)}, got nothing`);
+    else if (!same(k, want, got)) problems.push(`${prefix}${k}: expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`);
+  }
+  for (const [k, got] of Object.entries(actual)) {
+    // Code fills in plain / multi-colour from a number of colours; that was said.
+    if (k === "print" && "printColours" in expected) continue;
+    if (k === "printColours" && got === 0 && expected.print === "Plain") continue;
+    if (!(k in expected)) problems.push(`${prefix}${k}: not said, but the card has ${JSON.stringify(got)}`);
+  }
 }
 
 export interface CaseResult {
@@ -64,27 +84,31 @@ export function isDailyLimit(error: string): boolean {
   return /tokens per day|\bTPD\b|requests per day|\bRPD\b/i.test(error);
 }
 
-export function compareCase(c: HarnessCase, g: GuardedRequest | null, error: string | null): CaseResult {
-  if (error || !g) {
+export function compareCase(c: HarnessCase, card: NewCard | null, dropped: readonly Dropped[], error: string | null): CaseResult {
+  if (error || !card) {
     const problem = error ?? "no card was made";
     return { id: c.id, pass: false, serviceError: isServiceError(problem), problems: [problem] };
   }
-  const actual = spokenCard(g);
   const problems: string[] = [];
-  for (const [k, want] of Object.entries(c.expect)) {
-    const got = actual[k];
-    if (got === undefined) problems.push(`${k}: expected ${JSON.stringify(want)}, got nothing`);
-    else if (!same(k, want, got)) problems.push(`${k}: expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`);
+  const top = spokenSpecs({ ...card.customer, ...card.terms });
+  if (c.boxes) {
+    compareValues("", c.expect, top, problems);
+    if (card.boxes.length !== c.boxes.length) problems.push(`boxes: expected ${c.boxes.length}, got ${card.boxes.length}`);
+    c.boxes.forEach((want, i) => {
+      const got = card.boxes[i];
+      if (got) compareValues(`box ${i + 1} `, want, spokenSpecs(got), problems);
+    });
+  } else {
+    if (card.boxes.length !== 1) problems.push(`boxes: expected 1, got ${card.boxes.length}`);
+    compareValues("", c.expect, { ...top, ...spokenSpecs(card.boxes[0] ?? {}) }, problems);
   }
-  for (const [k, got] of Object.entries(actual)) {
-    if (!(k in c.expect)) problems.push(`${k}: not said, but the card has ${JSON.stringify(got)}`);
-  }
-  for (const d of g.dropped) {
-    if (d.field in c.expect) problems.push(`${d.field}: dropped “${d.value}” (${d.reason})`);
+  const expectedKeys = new Set([...Object.keys(c.expect), ...(c.boxes ?? []).flatMap((b) => Object.keys(b))]);
+  for (const d of dropped) {
+    if (expectedKeys.has(d.field)) problems.push(`${d.field}: dropped “${d.value}” (${d.reason})`);
   }
   if (c.missing) {
     const want = [...c.missing].sort();
-    const got = missingFields({ ...g.specs, ...g.customer } as Specs, "card").sort();
+    const got = cardMissing(card.customer, card.boxes.map((specs) => ({ specs }))).sort();
     if (want.join(",") !== got.join(",")) problems.push(`missing: expected [${want.join(", ")}], got [${got.join(", ")}]`);
   }
   return { id: c.id, pass: problems.length === 0, problems };

@@ -1,28 +1,27 @@
 import "server-only";
 import type { HydratedDocument, Types } from "mongoose";
+import { AI_LIMIT_MESSAGE, aiCounterName, aiDailyLimit, isProviderDailyLimit } from "@/lib/commands/ai-limit";
 import { applyPlan } from "@/lib/commands/apply";
 import { entryAction } from "@/lib/commands/history";
-import { describeScreen, findCustomer, loadCard, resolveTarget, type LoadedCard } from "@/lib/commands/cards";
+import { companyKey, type Box } from "@/lib/card";
+import { collectCreate, collectEdit } from "@/lib/commands/changes";
+import { describeScreen, findCustomer, loadCard, resolveTarget, stateFromSnapshot, type LoadedCard } from "@/lib/commands/cards";
 import { fastCommand } from "@/lib/commands/fastpath";
+import { understoodFrom, type Understood } from "@/lib/checklist";
 import { copyableSpecs } from "@/lib/commands/repeat";
-import {
-  PlanOps,
-  buildCreatePlan,
-  buildEditPlan,
-  buildRatePlan,
-  buildStagePlan,
-  buildUndoPlan,
-  companyKey,
-  type ExistingCustomer,
-  type PlanView,
-} from "@/lib/commands/plan";
+import { PlanOps, buildCreatePlan, buildEditPlan, buildStagePlan, buildUndoPlan, previewCard, totalsLines, type ExistingCustomer, type PlanView } from "@/lib/commands/plan";
+import type { NewCard } from "@/lib/commands/changes";
+import type { Specs } from "@/lib/fields";
+import { priceEdit, priceNewCard } from "@/lib/pricing/apply";
+import { SELLER_KEYS, SELLER_LABEL, readQuoteText, type QuoteText, type SellerWords } from "@/lib/commands/quotetext";
 import { BoxCardViewSchema, type CommandResult } from "@/lib/commands/types";
-import { isLengthUnit } from "@/lib/calc/units";
+import { CompanyProfile, stateCodeOf } from "@/lib/company";
 import { connectDb } from "@/lib/db";
-import { Customer, ParseLog, PendingPlan, Quotation, Request, type PendingPlanDoc } from "@/lib/models";
-import { QUOTE_FIELDS, missingFor } from "@/lib/quote/build";
+import { getCompany, getPricing, saveCompany } from "@/lib/settings";
+import { Customer, ParseLog, PendingPlan, Quotation, Request, nextSeq, type PendingPlanDoc } from "@/lib/models";
+import { quoteGaps } from "@/lib/quote/build";
 import { offerApproval } from "@/lib/quote/drafts";
-import { guardRequestFields } from "@/lib/nlp/guard";
+import type { GuardedRequest } from "@/lib/nlp/guard";
 import { LlmConfigError, createLlm, llmEnvFromProcess } from "@/lib/nlp/llm";
 import { parseCommand, type ParseResult } from "@/lib/nlp/parse";
 
@@ -33,6 +32,8 @@ import { parseCommand, type ParseResult } from "@/lib/nlp/parse";
  */
 
 const PLAN_TTL_MS = 24 * 60 * 60 * 1000;
+const NOTHING: GuardedRequest = { customer: {}, specs: {}, sizeWithoutUnit: null, dropped: [] };
+const R = (v: object) => v as Record<string, string | number | null>;
 type Plan = HydratedDocument<PendingPlanDoc>;
 
 async function latestPendingPlan(): Promise<Plan | null> {
@@ -49,7 +50,30 @@ function planResult(plan: Pick<PendingPlanDoc, "_id" | "lines" | "ops">): Comman
     lines: plan.lines,
     warnings: view?.warnings ?? [],
     card: card.success ? card.data : undefined,
+    understood: understoodOf(plan.ops),
   };
+}
+
+/**
+ * The plan this command belongs to. New quote starts clean: an old plan he isn't
+ * looking at there must not swallow a new request as a "correction". It is dropped
+ * (nothing was saved), except a quotation waiting for approval, which simply stays waiting.
+ */
+async function waitingPlanFor(path: string, planId?: string): Promise<Plan | null> {
+  const plan = await latestPendingPlan();
+  if (!plan || !path.startsWith("/quote/new") || plan._id.toString() === planId) return plan;
+  if (plan.action !== "approve_quote") {
+    plan.status = "superseded";
+    await plan.save();
+    if (plan.parseLogId) await ParseLog.updateOne({ _id: plan.parseLogId }, { outcome: "cancelled" });
+  }
+  return null;
+}
+
+/** A new enquiry's boxes, in checklist terms. */
+function understoodOf(ops: unknown): Understood | undefined {
+  const parsed = PlanOps.safeParse(ops);
+  return parsed.success && parsed.data.kind === "create_request" ? understoodFrom(parsed.data.boxes) : undefined;
 }
 
 /** The waiting plan, as the command box shows it (used when a screen loads). */
@@ -96,7 +120,7 @@ function toExisting(doc: { company: string; contactPerson?: string; phone?: stri
 function earlierOf(pending: Plan | null): { heard: string[]; rawTexts: string[]; requestId?: string } | null {
   if (!pending) return null;
   const ops = PlanOps.safeParse(pending.ops);
-  if (!ops.success || ops.data.kind === "undo") return null;
+  if (!ops.success || ops.data.kind === "undo" || ops.data.kind === "quote_text") return null;
   // A waiting "approve quotation" is not something to correct, but later commands still mean that card.
   if (ops.data.kind === "approve_quote") return { heard: [], rawTexts: [], requestId: ops.data.requestId };
   return {
@@ -130,7 +154,7 @@ async function makeUndoPlan(path: string, text: string): Promise<CommandResult> 
   const view = buildUndoPlan(card.state, {
     action,
     summary: entry.summary,
-    changes: entry.changes,
+    before: entry.before ? stateFromSnapshot(entry.before, card.state) : undefined,
     stageBefore: entry.stageBefore,
     stageAfter: entry.stageAfter,
   });
@@ -139,13 +163,106 @@ async function makeUndoPlan(path: string, text: string): Promise<CommandResult> 
   });
 }
 
+/** "notes mein likho …" / "hamari company ka naam … karo": a plan like any other, approved before it is saved. */
+/** Each detail is checked on its own: a wrong GSTIN is left out, the rest still goes in. */
+async function checkSeller(said: SellerWords): Promise<{ seller: SellerWords; lines: string[]; problems: string[] }> {
+  const company = await getCompany();
+  const seller: SellerWords = {};
+  const lines: string[] = [];
+  const problems: string[] = [];
+  for (const key of SELLER_KEYS) {
+    const value = said[key];
+    if (value === undefined) continue;
+    const checked = CompanyProfile.shape[key].safeParse(value);
+    if (!checked.success) {
+      problems.push(`${SELLER_LABEL[key]} “${value}” not changed: ${checked.error.issues[0]?.message ?? "it doesn't look right"}.`);
+      continue;
+    }
+    seller[key] = checked.data;
+    lines.push(`${SELLER_LABEL[key]}: ${company[key] || "not set"} → ${checked.data}`);
+  }
+  return { seller, lines, problems };
+}
+
+/**
+ * The Your company page only edits the text on your letterhead: what is said
+ * there is saved at once, with no plan to approve. Enquiries are never touched from here.
+ */
+async function saveFromCompanyPage(text: string): Promise<CommandResult> {
+  const words = readQuoteText(text, { ownCompany: true });
+  if (!words?.seller) {
+    return { kind: "message", text: "This box changes your company details. Say, for example, “company name Shree Packaging”, “email …”, “GSTIN …”, “phone …” or “address …”." };
+  }
+  const { seller, lines, problems } = await checkSeller(words.seller);
+  if (lines.length === 0) return { kind: "error", text: problems.join(" ") };
+  const saved = await saveCompany(seller);
+  if (!saved.ok) return { kind: "error", text: saved.error };
+  return { kind: "message", text: [`Saved. ${lines.join("; ")}.`, ...problems].join(" ") };
+}
+
+async function makeQuoteTextPlan(words: QuoteText, path: string, text: string, pending: Plan | null): Promise<CommandResult> {
+  if (pending && pending.action !== "quote_text") return { kind: "message", text: "A plan is waiting. Say “approve” or “cancel” for it first." };
+  const { card } = await describeScreen(path);
+  const lines: string[] = [];
+  const warnings: string[] = [];
+  let requestId: string | undefined;
+  let seller: SellerWords | undefined;
+  if (words.seller) {
+    const checked = await checkSeller(words.seller);
+    seller = checked.seller;
+    lines.push(...checked.lines);
+    warnings.push(...checked.problems);
+    if (lines.length === 0) return { kind: "error", text: warnings.join(" ") };
+    warnings.push("Shows on every quotation not yet sent. Sent ones keep the details they went out with.");
+  }
+  if (words.notes !== undefined) {
+    if (!card) return { kind: "message", text: "Open the enquiry first, then say the notes." };
+    const quote = await Quotation.findOne({ requestId: card.request._id }).sort({ createdAt: -1 });
+    if (!quote) return { kind: "message", text: "There is no quotation on this enquiry yet. Say your rates first." };
+    requestId = card.request._id.toString();
+    lines.push(quote.notes ? `Notes: “${quote.notes}” → “${words.notes}”` : `Notes: “${words.notes}”`);
+    if (quote.status === "Sent") lines.push(`${quote.number ?? "The quotation"} was sent, so this makes a new revision.`);
+  }
+  const view: PlanView = {
+    title: seller ? "Change your company details" : `Notes on ${card?.state.ref ?? "the quotation"}`,
+    lines,
+    warnings,
+    card: card && !seller ? previewCard(card.state) : undefined,
+  };
+  return savePlan("quote_text", view, { kind: "quote_text", requestId, notes: words.notes, seller }, text, {
+    requestId: card?.request._id,
+    replaces: pending,
+  });
+}
+
+/** Adds the formula's working, notes and the totals to a new-enquiry plan. */
+async function withPricing(view: PlanView, newCard: NewCard, existing: ExistingCustomer | null, priced: { lines: string[]; warnings: string[] }): Promise<void> {
+  view.lines.push(...priced.lines);
+  view.warnings.push(...priced.warnings);
+  const customer = { ...(existing ?? {}), ...newCard.customer };
+  const card = { ref: "New", stage: "New" as const, customer, terms: newCard.terms, boxes: newCard.boxes.map((specs, i) => ({ id: `new${i}`, specs })) };
+  view.lines.push(...totalsLines(card, stateCodeOf(await getCompany())));
+}
+
+/** Same size, same box: the die and design from last time are used again, not charged again. */
+function reuseTooling(copy: Specs, source: Specs, now: Specs): Specs {
+  const sameBox = (["boxType", "length", "breadth", "height"] as const).every((k) => (now[k] ?? null) === (source[k] ?? null));
+  if (!sameBox) return now;
+  const out = { ...now };
+  if (copy.cutting === undefined || now.cutting === copy.cutting) out.cutting = source.cutting === "Slitter" ? "Slitter" : "Existing die";
+  if ((source.artwork === "We design" || source.artwork === "Existing") && (now.artwork === undefined || now.artwork === copy.artwork)) out.artwork = "Existing";
+  return out;
+}
+
 function parseError(parsed: ParseResult): CommandResult {
+  if (parsed.error && isProviderDailyLimit(parsed.error)) return { kind: "message", text: AI_LIMIT_MESSAGE };
   return { kind: "error", text: `Couldn't read that: ${parsed.error} Try again.` };
 }
 
-export async function handleCommand(text: string, path: string): Promise<CommandResult> {
+export async function handleCommand(text: string, path: string, planId?: string): Promise<CommandResult> {
   await connectDb();
-  const pending = await latestPendingPlan();
+  if (path.startsWith("/settings")) return saveFromCompanyPage(text);
+  const pending = await waitingPlanFor(path, planId);
   const fast = fastCommand(text);
 
   if (fast === "approve") {
@@ -153,7 +270,7 @@ export async function handleCommand(text: string, path: string): Promise<Command
     // "approve" on a card whose draft quotation is complete, after an earlier "cancel".
     const { card } = await describeScreen(path);
     const draft = card ? await Quotation.findOne({ requestId: card.request._id, status: "Draft" }) : null;
-    if (card && draft && missingFor(card.state.specs, QUOTE_FIELDS).length === 0) {
+    if (card && draft && quoteGaps(card.state).forApproval.length === 0) {
       await offerApproval(card.request, draft);
       const offered = await latestPendingPlan();
       if (offered) return applyPlan(offered);
@@ -173,12 +290,27 @@ export async function handleCommand(text: string, path: string): Promise<Command
     const quote = await Quotation.findOne({ requestId: card.request._id }).sort({ createdAt: -1 });
     if (!quote) return { kind: "message", text: "There is no quotation on this card yet. Say your rate first." };
     if (quote.status === "Draft") return { kind: "message", text: "Approve the quotation first, then say “bhej do”." };
-    return { kind: "share", quotationId: quote._id.toString(), text: `Opening WhatsApp for ${quote.number ?? "the quotation"}…` };
+    return { kind: "share", quotationId: quote._id.toString(), text: `Sending ${quote.number ?? "the quotation"}…` };
   }
+  if (fast === "edit") {
+    const { card } = await describeScreen(path);
+    const quote = card ? await Quotation.findOne({ requestId: card.request._id }).sort({ createdAt: -1 }) : null;
+    if (!card) return { kind: "message", text: "Open the enquiry first, then say “PDF edit karna hai”." };
+    if (!quote) return { kind: "message", text: "There is no quotation on this enquiry yet. Say your rates first." };
+    return {
+      kind: "edit_mode",
+      text: "Editing is on. Click any detail on the quotation and type, or say the change here: “box 2 ka rate 21”, “notes mein likho ex works Bhiwandi”, “hamari company ka naam Shree Packaging karo”.",
+    };
+  }
+  const words = readQuoteText(text);
+  if (words) return makeQuoteTextPlan(words, path, text, pending);
   if (fast === "undo") {
     if (pending && pending.action !== "approve_quote") return { kind: "message", text: "A plan is waiting. Say “approve” or “cancel” for it first, then “undo”." };
     return makeUndoPlan(path, text);
   }
+
+  // Only what follows uses the AI, so only this counts towards the daily limit.
+  if ((await nextSeq(aiCounterName(new Date()))) > aiDailyLimit(process.env.AI_DAILY_LIMIT)) return { kind: "message", text: AI_LIMIT_MESSAGE };
 
   let llm;
   try {
@@ -189,14 +321,13 @@ export async function handleCommand(text: string, path: string): Promise<Command
   }
 
   const { screen, card: onScreen } = await describeScreen(path);
-  const earlier = earlierOf(pending);
+  // Only the plan on his screen can be corrected; anything else he says stands on its own.
+  const earlier = pending && pending._id.toString() === planId ? earlierOf(pending) : null;
   const earlierCard = earlier?.requestId ? await loadCard(earlier.requestId) : null;
-  const unitCard = earlierCard ?? onScreen;
   const parsed = await parseCommand(text, llm, {
-    screen,
+    screen: onScreen && onScreen.state.boxes.length > 1 ? `${screen} (${onScreen.state.boxes.length} boxes)` : screen,
     screenCompany: onScreen?.request.customerName,
     earlier: earlier?.heard.join(" "),
-    defaultUnit: isLengthUnit(unitCard?.state.specs.dimUnit) ? unitCard.state.specs.dimUnit : undefined,
   });
 
   const log = await ParseLog.create({
@@ -257,46 +388,37 @@ export async function handleCommand(text: string, path: string): Promise<Command
         .sort({ approvedAt: -1 })
         .lean();
       const lastCard = lastQuote ? null : await Request.findOne({ customerId: customer._id, deletedAt: null }).sort({ createdAt: -1 }).lean();
-      const source = lastQuote?.specsSnapshot ?? lastCard?.specs;
-      if (!source) return { kind: "message", text: `No earlier order found for ${customer.company}.` };
+      const sources = lastQuote ? lastQuote.lines.map((l) => l.specs) : (lastCard?.items ?? []).map((i) => i.specs);
+      if (sources.length === 0) return { kind: "message", text: `No earlier order found for ${customer.company}.` };
 
-      const copied = copyableSpecs(source);
-      const overrides = parsed.request ?? { customer: {}, specs: {}, sizeWithoutUnit: null, dropped: [] };
-      const guarded = {
-        ...overrides,
-        customer: { company: customer.company },
-        specs: { ...copied, ...overrides.specs },
-      };
-      const view = buildCreatePlan(guarded, parsed.unclear, toExisting(customer));
-      const fromWhat = lastQuote
-        ? `quotation ${lastQuote.number ?? ""} of ${(lastQuote.approvedAt ?? lastQuote.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" })}`
-        : `card ${lastCard?.number ? `REQ-${String(lastCard.number).padStart(3, "0")}` : ""}`;
+      // What he changes now goes on top of the copy: "box 2 …" to that box, plain fields to every box.
+      const copied: Box[] = sources.map((src, i) => ({ id: String(i), specs: copyableSpecs(src) }));
+      const changes = collectEdit({ ref: "", stage: "New", customer: {}, terms: {}, boxes: copied }, parsed.request ?? NOTHING, parsed.boxes, { allBoxes: true });
+      const boxes = copied.map((b, i) => reuseTooling(b.specs, sources[i] ?? {}, { ...b.specs, ...(changes.set.find((c) => c.id === b.id)?.values ?? {}) }));
+      const priced = priceNewCard({ customer: { company: customer.company }, terms: changes.terms, boxes: [...boxes, ...changes.add], warnings: changes.warnings }, await getPricing());
+      const newCard = priced.card;
+      const view = buildCreatePlan(newCard, parsed.unclear, toExisting(customer));
+      await withPricing(view, newCard, toExisting(customer), priced);
+      const when = lastQuote
+        ? (lastQuote.approvedAt ?? lastQuote.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" })
+        : "";
+      const fromWhat = lastQuote ? `quotation ${lastQuote.number ?? ""} of ${when}` : `card ${lastCard?.number ? `REQ-${String(lastCard.number).padStart(3, "0")}` : ""}`;
       view.title = `Same as last time for ${customer.company}`;
       view.lines.unshift(`Copied from ${fromWhat.replace(/\s+/g, " ").trim()}`);
-      view.warnings.unshift("Rate and terms are not copied. Say them on the new card.");
-      const ops: PlanOps = {
-        kind: "create_request",
-        customer: { company: customer.company },
-        specs: guarded.specs as Record<string, string | number | null>,
-        heard,
-        rawTexts,
-      };
+      view.warnings.unshift("Rates are worked out again by your formula; terms are not copied.");
+      const ops: PlanOps = { kind: "create_request", customer: { company: customer.company }, terms: R(newCard.terms), boxes: newCard.boxes.map(R), heard, rawTexts };
       return savePlan("create_request", view, ops, text, { parseLogId: log._id, replaces: pending });
     }
 
     case "create_request": {
       if (!parsed.request) return { kind: "message", text: "Didn't catch a box request in that." };
-      const guarded = parsed.request;
-      const company = guarded.customer.company;
-      const existing = company ? await Customer.findOne({ companyKey: companyKey(company) }).lean() : null;
-      const view = buildCreatePlan(guarded, parsed.unclear, toExisting(existing));
-      const ops: PlanOps = {
-        kind: "create_request",
-        customer: Object.fromEntries(Object.entries(guarded.customer).filter((e): e is [string, string] => typeof e[1] === "string")),
-        specs: Object.fromEntries(Object.entries(guarded.specs).filter(([, v]) => v !== undefined)) as Record<string, string | number | null>,
-        heard,
-        rawTexts,
-      };
+      const priced = priceNewCard(collectCreate(parsed.request, parsed.boxes, cmd.allBoxes), await getPricing());
+      const newCard = priced.card;
+      const company = newCard.customer.company;
+      const existing = typeof company === "string" ? await Customer.findOne({ companyKey: companyKey(company) }).lean() : null;
+      const view = buildCreatePlan(newCard, parsed.unclear, toExisting(existing));
+      await withPricing(view, newCard, toExisting(existing), priced);
+      const ops: PlanOps = { kind: "create_request", customer: R(newCard.customer), terms: R(newCard.terms), boxes: newCard.boxes.map(R), heard, rawTexts };
       return savePlan("create_request", view, ops, text, { parseLogId: log._id, replaces: pending });
     }
 
@@ -321,14 +443,16 @@ export async function handleCommand(text: string, path: string): Promise<Command
         });
       }
 
-      // Re-check the fields with this card's own unit (the target may not be the card on screen).
-      // Only the owner's own "set rate" command may carry a rate.
+      // Only the owner's own "set rate" command may carry a rate (the guard in parse already checked).
       const isRate = cmd.intent === "set_rate";
-      const unit = isLengthUnit(card.state.specs.dimUnit) ? card.state.specs.dimUnit : undefined;
-      const guarded = guardRequestFields(cmd.fields, parsed.heardText, { defaultUnit: unit, allowRate: isRate });
-      const view = isRate ? buildRatePlan(card.state, guarded, parsed.unclear) : buildEditPlan(card.state, guarded, parsed.unclear);
+      const priced = priceEdit(card.state, collectEdit(card.state, parsed.request ?? NOTHING, parsed.boxes, { allBoxes: cmd.allBoxes, remove: cmd.remove }), await getPricing());
+      const edit = priced.edit;
+      // A rate the formula just worked out builds the quotation, the same as one he said.
+      const quoted = isRate || edit.set.some((c) => typeof c.values.ratePerBox === "number") || edit.add.some((a) => typeof a.ratePerBox === "number");
+      const view = buildEditPlan(card.state, edit, parsed.unclear, { rate: quoted, stateCode: stateCodeOf(await getCompany()), formula: priced.lines });
+      view.warnings.push(...priced.warnings);
       view.warnings.unshift(...notes);
-      if (Object.keys(view.set).length === 0) {
+      if (view.empty) {
         await ParseLog.updateOne({ _id: log._id }, { outcome: "cancelled" });
         const why = view.warnings.length ? ` ${view.warnings.join(" ")}` : "";
         return { kind: "message", text: `Nothing to change on ${card.state.ref}.${why}` };
@@ -336,8 +460,12 @@ export async function handleCommand(text: string, path: string): Promise<Command
       const ops: PlanOps = {
         kind: "edit_request",
         requestId: card.request._id.toString(),
-        set: view.set as Record<string, string | number | null>,
-        quote: isRate,
+        customer: R(edit.customer),
+        terms: R(edit.terms),
+        set: edit.set.map((c) => ({ id: c.id, values: R(c.values) })),
+        add: edit.add.map(R),
+        remove: edit.remove,
+        quote: quoted,
         heard,
         rawTexts,
       };

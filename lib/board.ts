@@ -1,5 +1,5 @@
+import { boxLabel, boxSummary } from "@/lib/card";
 import { getField, STAGES, type FieldKey, type Specs, type Stage } from "@/lib/fields";
-import { formatSize, isLengthUnit } from "@/lib/calc/units";
 
 /**
  * Board filters. "Pending" is every open request (New, Quoted, Sent); each card
@@ -54,18 +54,23 @@ export function waitingOn(stage: Stage, missingCount: number, hasDraftQuote: boo
   }
 }
 
+export interface BoxLine {
+  label: string;
+  summary: string;
+}
+
 export interface BoxCardView {
   id: string;
-  /** REQ-016 style label, when the request has a number. */
+  /** REQ-016 style label, when the enquiry has a number. */
   ref: string | null;
   company: string;
   stage: Stage;
-  size: string | null;
-  ply: string | null;
-  load: string | null;
-  quantity: string | null;
-  print: string | null;
-  /** Short labels of missing card fields, e.g. ["Flute", "Joint"]. */
+  boxCount: number;
+  /** The first few boxes, one line each. */
+  boxes: BoxLine[];
+  /** Total pieces across all boxes, e.g. "3,500". */
+  totalQuantity: string | null;
+  /** Short labels of anything not said yet, e.g. ["Flute", "Address"]. */
   missing: string[];
   waitingOn: WaitingOn | null;
 }
@@ -73,9 +78,11 @@ export interface BoxCardView {
 export interface CardSource {
   id: string;
   number?: number;
+  /** Used instead of number for previews ("New"). */
+  ref?: string;
   customerName: string;
   stage: Stage;
-  specs: Specs;
+  boxes: readonly { specs: Specs }[];
   missing: readonly FieldKey[];
   hasDraftQuote?: boolean;
 }
@@ -91,36 +98,42 @@ const SHORT_LABEL: Partial<Record<FieldKey, string>> = {
   quantity: "Qty",
 };
 
-function num(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
+const SHOWN_BOXES = 3;
 
-/** Turns a stored request into what the box card shows. */
+/** Turns a stored enquiry into what its card on the board shows. */
 export function buildCardView(src: CardSource): BoxCardView {
-  const s = src.specs;
-  const unit = isLengthUnit(s.dimUnit) ? s.dimUnit : "inch";
-  const ply = num(s.ply);
-  const load = num(s.loadKg);
-  const qty = num(s.quantity);
-  const colours = num(s.printColours);
-
   const labels: string[] = [];
   for (const key of src.missing) {
     const label = SHORT_LABEL[key] ?? getField(key)?.label ?? key;
     if (!labels.includes(label)) labels.push(label);
   }
-
+  const quantities = src.boxes.map((b) => b.specs.quantity).filter((q): q is number => typeof q === "number");
+  const total = quantities.reduce((a, b) => a + b, 0);
   return {
     id: src.id,
-    ref: src.number ? `REQ-${String(src.number).padStart(3, "0")}` : null,
+    ref: src.ref ?? (src.number ? `REQ-${String(src.number).padStart(3, "0")}` : null),
     company: src.customerName,
     stage: src.stage,
-    size: formatSize(num(s.length), num(s.breadth), num(s.height), unit),
-    ply: ply === null ? null : String(ply),
-    load: load === null ? null : `${load} KG`,
-    quantity: qty === null ? null : qty.toLocaleString("en-IN"),
-    print: colours === null ? null : colours === 0 ? "Plain" : `${colours}-colour`,
+    boxCount: src.boxes.length,
+    boxes: src.boxes.slice(0, SHOWN_BOXES).map((b, i) => ({ label: boxLabel(i), summary: boxSummary(b.specs) })),
+    totalQuantity: quantities.length ? total.toLocaleString("en-IN") : null,
     missing: labels,
     waitingOn: waitingOn(src.stage, src.missing.length, src.hasDraftQuote ?? false),
   };
+}
+
+/** Words said around a search that aren't part of the name ("Sharma dhundo", "search for Gupta Foods ka card"). */
+const SEARCH_FILLER =
+  /^(?:please\s+)?(?:search(?:\s+for)?|find|show(?:\s+me)?|open|look\s+for)\s+|\s+(?:ka|ki|ke|wala|wali|wale)?\s*(?:card|enquiry|enquiries|quotation|quote)?\s*(?:dhundo|dhoondo|dhundho|khojo|dikhao|kholo|search karo|find karo)?$/i;
+
+/** What a spoken or typed search looks for: an enquiry number ("REQ 4") or part of a company name. */
+export function searchTerms(raw: string): { number?: number; company?: string } {
+  let q = raw.trim().replace(/[.?!]+$/, "").replace(/\s+/g, " ");
+  for (let prev = ""; prev !== q; ) {
+    prev = q;
+    q = q.replace(SEARCH_FILLER, "").trim();
+  }
+  const ref = /^(?:req|request|enquiry)[\s-]*0*(\d{1,6})$/i.exec(q);
+  if (ref) return { number: Number(ref[1]) };
+  return q ? { company: q } : {};
 }

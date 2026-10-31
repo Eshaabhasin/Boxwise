@@ -40,6 +40,10 @@ function join(tokens: readonly string[]): string {
 
 export function normalize(text: string): string {
   let t = text.normalize("NFKC").replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+  // Wispr Flow writes big numbers with commas: "1,000", "1,00,000" (Indian), "10,000".
+  // Only real digit groups lose their comma, so "12,10" (two numbers) stays as it is.
+  // Western grouping (1,234,567) is tried before Indian (12,34,567).
+  t = t.replace(/\b\d{1,3}(?:,\d{3})+\b|\b\d{1,3}(?:,\d{2})*,\d{3}\b/g, (m) => m.replace(/,/g, ""));
   // 12x10x8, 12 × 10, 12*10 -> by. Repeat because matches overlap.
   for (let k = 0; k < 3; k++) t = t.replace(/(\d)\s*[x×*]\s*(?=\d)/gi, "$1 by ");
   t = t.replace(UNIT_SUFFIX, "$1 $2");

@@ -1,8 +1,8 @@
 import "server-only";
 import { isValidObjectId, type HydratedDocument } from "mongoose";
-import { companyKey, requestRef, type CardState } from "@/lib/commands/plan";
-import { CUSTOMER_FIELD_KEYS, missingFields, type FieldKey, type Specs } from "@/lib/fields";
-import { Customer, Request, type CustomerDoc, type RequestDoc } from "@/lib/models";
+import { boxMissing, cardMissing, companyKey, requestRef, type CardState } from "@/lib/card";
+import { CUSTOMER_FIELD_KEYS, type Specs } from "@/lib/fields";
+import { Customer, Request, type CardSnapshot, type CustomerDoc, type RequestDoc } from "@/lib/models";
 
 /** Server helpers for finding a card and reading it with its customer. */
 
@@ -12,9 +12,9 @@ export interface LoadedCard {
   state: CardState;
 }
 
-/** Card specs merged with the customer's fields, as the plan builders and missing flags need them. */
-export function mergedSpecs(request: Pick<RequestDoc, "specs" | "customerName">, customer: CustomerDoc | null): Specs {
-  const specs: Specs = { ...request.specs, company: customer?.company ?? request.customerName };
+/** The customer's fields as card values (company, contact, phone, GSTIN, address). */
+export function customerSpecs(request: Pick<RequestDoc, "customerName">, customer: CustomerDoc | null): Specs {
+  const specs: Specs = { company: customer?.company ?? request.customerName };
   for (const k of CUSTOMER_FIELD_KEYS) {
     if (k === "company") continue;
     const v = customer?.[k as keyof CustomerDoc];
@@ -23,8 +23,58 @@ export function mergedSpecs(request: Pick<RequestDoc, "specs" | "customerName">,
   return specs;
 }
 
-export function cardMissing(specs: Specs): FieldKey[] {
-  return missingFields(specs, "card");
+export function cardState(request: Pick<RequestDoc, "number" | "stage" | "items" | "terms" | "customerName">, customer: CustomerDoc | null): CardState {
+  return {
+    ref: requestRef(request.number),
+    stage: request.stage,
+    customer: customerSpecs(request, customer),
+    boxes: (request.items ?? []).map((i) => ({ id: i.id, specs: { ...i.specs } })),
+    terms: { ...(request.terms ?? {}) },
+  };
+}
+
+/** What "undo" needs to put the card back. */
+export function snapshotOf(state: CardState): CardSnapshot {
+  return {
+    items: state.boxes.map((b) => ({ id: b.id, specs: { ...b.specs }, missing: [] })),
+    terms: { ...state.terms },
+    customer: { ...state.customer },
+  };
+}
+
+export function stateFromSnapshot(snap: CardSnapshot, base: Pick<CardState, "ref" | "stage">): CardState {
+  return {
+    ...base,
+    customer: { ...snap.customer },
+    boxes: snap.items.map((i) => ({ id: i.id, specs: { ...i.specs } })),
+    terms: { ...snap.terms },
+  };
+}
+
+/**
+ * Writes a card state onto the request and its customer documents (not saved).
+ * Customer fields go to the customer record; renaming the company is not done here.
+ */
+export function writeCard(request: HydratedDocument<RequestDoc>, customer: HydratedDocument<CustomerDoc> | null, state: CardState): void {
+  request.items = state.boxes.map((b) => ({ id: b.id, specs: b.specs, missing: [] }));
+  request.terms = state.terms;
+  request.markModified("items");
+  request.markModified("terms");
+  if (customer) {
+    for (const k of CUSTOMER_FIELD_KEYS) {
+      if (k === "company") continue;
+      const v = state.customer[k];
+      customer.set(k, typeof v === "string" && v ? v : undefined);
+    }
+  }
+  refreshMissing(request, state);
+}
+
+/** Recomputes the per-box and card-level NOT SAID lists. */
+export function refreshMissing(request: HydratedDocument<RequestDoc>, state: CardState): void {
+  request.items = state.boxes.map((b) => ({ id: b.id, specs: b.specs, missing: boxMissing(b.specs) }));
+  request.missing = cardMissing(state.customer, state.boxes);
+  request.markModified("items");
 }
 
 export async function loadCard(id: string): Promise<LoadedCard | null> {
@@ -32,11 +82,7 @@ export async function loadCard(id: string): Promise<LoadedCard | null> {
   const request = await Request.findOne({ _id: id, deletedAt: null });
   if (!request) return null;
   const customer = await Customer.findById(request.customerId);
-  return {
-    request,
-    customer,
-    state: { ref: requestRef(request.number), stage: request.stage, specs: mergedSpecs(request, customer) },
-  };
+  return { request, customer, state: cardState(request, customer) };
 }
 
 /** The card id in a /quote/<id> path, if the command was spoken on a card. */

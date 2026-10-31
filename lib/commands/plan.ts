@@ -1,17 +1,25 @@
 import { z } from "zod";
 import { buildCardView, type BoxCardView } from "@/lib/board";
-import { formatSize, isLengthUnit, fromMm } from "@/lib/calc/units";
-import { FIELD_DEFS, STAGES, missingFields, getField, type FieldKey, type SpecValue, type Specs, type Stage } from "@/lib/fields";
+import { boxLabel, boxSummary, cardMissing, display, sizeText, type Box, type CardState } from "@/lib/card";
+import type { CardEdit, NewCard } from "@/lib/commands/changes";
 import { formatINR } from "@/lib/calc/money";
-import { COMPANY } from "@/lib/company";
-import type { GuardedRequest } from "@/lib/nlp/guard";
-import { DRAFT_FIELDS, QUOTE_FIELDS, buildQuoteSnapshot, missingFor } from "@/lib/quote/build";
+import { DEFAULT_COMPANY, stateCodeOf } from "@/lib/company";
+import { SPOKEN_FIELD_DEFS, STAGES, getField, type FieldKey, type SpecValue, type Specs, type Stage } from "@/lib/fields";
+import { buildQuote, lineOwner, quoteGaps } from "@/lib/quote/build";
 
-/** What a "create request" plan will do when approved. Stored on the pending plan and checked again before applying. */
+/**
+ * Plans: what will happen when the owner says "approve". The lines he reads
+ * come from one diff (card before → card after), so creating, editing,
+ * setting rates and undoing all read the same way. Pure: no database.
+ */
+
+const SpecsSchema = z.record(z.string(), z.union([z.string(), z.number(), z.null()]));
+
 export const CreateRequestOps = z.object({
   kind: z.literal("create_request"),
-  customer: z.record(z.string(), z.string()),
-  specs: z.record(z.string(), z.union([z.string(), z.number(), z.null()])),
+  customer: SpecsSchema,
+  terms: SpecsSchema,
+  boxes: z.array(SpecsSchema),
   /** Normalized text of every utterance in this plan, oldest first. */
   heard: z.array(z.string()),
   /** What was dictated, word for word, oldest first. */
@@ -19,21 +27,21 @@ export const CreateRequestOps = z.object({
 });
 export type CreateRequestOps = z.infer<typeof CreateRequestOps>;
 
-const SpecValueSchema = z.union([z.string(), z.number(), z.null()]);
-
-/** Change fields of one card (customer fields go to the customer record). */
 export const EditRequestOps = z.object({
   kind: z.literal("edit_request"),
   requestId: z.string(),
-  set: z.record(z.string(), SpecValueSchema),
-  /** The owner's rate/terms: after applying, build the draft quotation. */
+  customer: SpecsSchema,
+  terms: SpecsSchema,
+  set: z.array(z.object({ id: z.string(), values: SpecsSchema })),
+  add: z.array(SpecsSchema),
+  remove: z.array(z.string()),
+  /** The owner's rate/terms: after applying, (re)build the draft quotation. */
   quote: z.boolean().default(false),
   heard: z.array(z.string()),
   rawTexts: z.array(z.string()),
 });
 export type EditRequestOps = z.infer<typeof EditRequestOps>;
 
-/** Move a card to Won, Lost or back to New. */
 export const SetStageOps = z.object({
   kind: z.literal("set_stage"),
   requestId: z.string(),
@@ -44,27 +52,30 @@ export const SetStageOps = z.object({
 export type SetStageOps = z.infer<typeof SetStageOps>;
 
 /** Reverse one applied change, found by the plan that made it. */
-export const UndoOps = z.object({
-  kind: z.literal("undo"),
-  requestId: z.string(),
-  planId: z.string(),
-});
+export const UndoOps = z.object({ kind: z.literal("undo"), requestId: z.string(), planId: z.string() });
 export type UndoOps = z.infer<typeof UndoOps>;
 
 /** Approve a draft quotation: give it its number and move the card to Quoted. */
-export const ApproveQuoteOps = z.object({
-  kind: z.literal("approve_quote"),
-  requestId: z.string(),
-  quotationId: z.string(),
-});
+export const ApproveQuoteOps = z.object({ kind: z.literal("approve_quote"), requestId: z.string(), quotationId: z.string() });
 export type ApproveQuoteOps = z.infer<typeof ApproveQuoteOps>;
 
-export const PlanOps = z.discriminatedUnion("kind", [CreateRequestOps, EditRequestOps, SetStageOps, UndoOps, ApproveQuoteOps]);
+/** Quotation-only words: the notes, or your company name on the letterhead. */
+export const QuoteTextOps = z.object({
+  kind: z.literal("quote_text"),
+  requestId: z.string().optional(),
+  notes: z.string().optional(),
+  seller: z.object({ name: z.string(), email: z.string(), gstin: z.string(), phone: z.string(), address: z.string() }).partial().optional(),
+});
+export type QuoteTextOps = z.infer<typeof QuoteTextOps>;
+
+export const PlanOps = z.discriminatedUnion("kind", [CreateRequestOps, EditRequestOps, SetStageOps, UndoOps, ApproveQuoteOps, QuoteTextOps]);
 export type PlanOps = z.infer<typeof PlanOps>;
 
-/** "Sharma Packaging" -> "sharma packaging"; used to match a customer said twice. */
-export function companyKey(company: string): string {
-  return (company.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
+export interface PlanView {
+  title: string;
+  lines: string[];
+  warnings: string[];
+  card?: BoxCardView;
 }
 
 export interface ExistingCustomer {
@@ -75,272 +86,236 @@ export interface ExistingCustomer {
   address?: string;
 }
 
-export interface PlanView {
-  title: string;
-  lines: string[];
-  warnings: string[];
-  card: BoxCardView;
+function label(k: FieldKey): string {
+  return getField(k)?.label ?? k;
 }
 
-export function display(key: FieldKey, value: SpecValue | undefined, specs: Specs): string {
-  if (value === undefined) return "—";
-  const f = getField(key);
-  if (value === null) return "—";
-  if (f?.kind === "length" && typeof value === "number") {
-    const unit = isLengthUnit(specs.dimUnit) ? specs.dimUnit : "mm";
-    return `${fromMm(value, unit)} ${unit}`;
-  }
-  if (key === "printColours") return value === 0 ? "plain (no print)" : `${value}-colour`;
-  if (key === "loadKg") return `${value} kg`;
-  if (key === "quantity" && typeof value === "number") return value.toLocaleString("en-IN");
-  if (key === "gstPercent") return `${value}%`;
-  if (f?.kind === "money" && typeof value === "number") return formatINR(value);
-  return String(value);
-}
-
-/**
- * The plan he reads before saying "approve": one line per value that will be
- * saved, what was not said, and anything that was heard but dropped.
- */
-export function buildCreatePlan(
-  guarded: GuardedRequest,
-  unclear: readonly string[],
-  existing: ExistingCustomer | null,
-): PlanView {
-  const lines: string[] = [];
-  const warnings: string[] = [];
-  const { customer, specs } = guarded;
-  const company = customer.company ?? existing?.company;
-
-  if (company) {
-    lines.push(existing ? `Customer: ${existing.company} (already in your list)` : `Customer: ${company} (new customer)`);
-  }
-  for (const key of ["contactPerson", "phone", "gstin", "address"] as const) {
-    const v = customer[key];
-    if (!v) continue;
-    const label = getField(key)?.label ?? key;
-    const before = existing?.[key];
-    lines.push(before && before !== v ? `${label}: ${v} (was ${before})` : `${label}: ${v}`);
-  }
-
-  const size = formatSize(
-    typeof specs.length === "number" ? specs.length : null,
-    typeof specs.breadth === "number" ? specs.breadth : null,
-    typeof specs.height === "number" ? specs.height : null,
-    isLengthUnit(specs.dimUnit) ? specs.dimUnit : "mm",
-  );
-  if (size) lines.push(`Size: ${size.replace(/ IN$/, " inch").replace(/ MM$/, " mm").replace(/ CM$/, " cm")}`);
-
-  for (const f of FIELD_DEFS) {
-    const key = f.key as FieldKey;
-    if (f.onCustomer || f.kind === "length" || key === "dimUnit") continue;
-    const v = specs[key];
-    if (v === undefined) continue;
-    lines.push(`${f.label}: ${display(key, v, specs)}`);
-  }
-
-  if (guarded.sizeWithoutUnit) {
-    const s = guarded.sizeWithoutUnit;
-    warnings.push(
-      `Size ${[s.length, s.breadth, s.height].map((n) => n ?? "?").join(" × ")} has no unit. Say “inch”, “cm” or “mm”, or it won't be saved.`,
-    );
-  }
-  for (const d of guarded.dropped) {
-    const label = getField(d.field)?.label ?? d.field;
-    warnings.push(`Left out ${label} “${d.value}”: ${d.reason}.`);
-  }
-  for (const note of unclear) warnings.push(`Unclear: ${note}`);
-  if (!company) warnings.push("No company name heard. Say the customer's company name.");
-
-  const known: Specs = { ...specs, ...customer, ...(existing ?? {}) };
-  const missing = missingFields(known, "card");
-  if (missing.length > 0) {
-    const labels = [...new Set(missing.map((k) => (["length", "breadth", "height"].includes(k) ? "Size" : getField(k)?.label ?? k)))];
-    lines.push(`Not said: ${labels.join(", ")}`);
-  }
-
-  return {
-    title: company ? `New box card for ${company}` : "New box card",
-    lines,
-    warnings,
-    card: buildCardView({ id: "preview", customerName: company ?? "Company not said", stage: "New", specs, missing }),
-  };
-}
-
-/** "REQ-016" */
-export function requestRef(number: number | undefined): string {
-  return number ? `REQ-${String(number).padStart(3, "0")}` : "REQ";
-}
-
-/** The card as it stands now, for building edit, stage and undo plans. */
-export interface CardState {
-  ref: string;
-  stage: Stage;
-  /** Card specs merged with the customer's fields. */
-  specs: Specs;
-}
-
-const SIDES: readonly FieldKey[] = ["length", "breadth", "height"];
-
-function viewAfter(card: CardState, specs: Specs, stage: Stage): BoxCardView {
+export function previewCard(card: CardState, stage: Stage = card.stage): BoxCardView {
   return buildCardView({
     id: "preview",
-    customerName: typeof specs.company === "string" ? specs.company : "",
+    ref: card.ref,
+    customerName: String(card.customer.company ?? "Company not said"),
     stage,
-    specs,
-    missing: missingFields(specs, "card"),
+    boxes: card.boxes,
+    missing: cardMissing(card.customer, card.boxes),
   });
 }
 
+function changedValue(k: FieldKey, before: SpecValue | undefined, after: SpecValue | undefined, ctxBefore: Specs, ctxAfter: Specs): string {
+  if (after === undefined || after === null) return `${label(k)}: ${display(k, before, ctxBefore)} → not set`;
+  if (before === undefined || before === null) return `${label(k)}: ${display(k, after, ctxAfter)}`;
+  return `${label(k)}: ${display(k, before, ctxBefore)} → ${display(k, after, ctxAfter)}`;
+}
+
+function fieldDiff(before: Specs, after: Specs): { key: FieldKey; line: string }[] {
+  const out: { key: FieldKey; line: string }[] = [];
+  for (const f of SPOKEN_FIELD_DEFS) {
+    const k = f.key as FieldKey;
+    if (before[k] === after[k]) continue;
+    if ((before[k] ?? null) === (after[k] ?? null)) continue;
+    out.push({ key: k, line: changedValue(k, before[k], after[k], before, after) });
+  }
+  return out;
+}
+
+/** Lines describing how card `a` becomes card `b`, in card order. */
+export function diffLines(a: CardState, b: CardState): string[] {
+  const lines: string[] = [];
+  for (const d of fieldDiff(a.customer, b.customer)) lines.push(d.line);
+  const many = a.boxes.length > 1 || b.boxes.length > 1;
+  b.boxes.forEach((box, i) => {
+    const old = a.boxes.find((x) => x.id === box.id);
+    if (!old) {
+      lines.push(`Add ${boxLabel(i)}: ${boxSummary(box.specs)}`);
+      return;
+    }
+    // Sizes read better as one line than three.
+    const diffs = fieldDiff(old.specs, box.specs);
+    const sides = diffs.filter((d) => d.key === "length" || d.key === "breadth" || d.key === "height");
+    const prefix = many ? `${boxLabel(i)} ` : "";
+    if (sides.length > 1) {
+      const from = sizeText(old.specs);
+      lines.push(from ? `${prefix}${many ? "size" : "Size"}: ${from} → ${sizeText(box.specs) ?? "—"}` : `${prefix}${many ? "size" : "Size"}: ${sizeText(box.specs) ?? "—"}`);
+    }
+    for (const d of diffs) {
+      if (sides.length > 1 && sides.includes(d)) continue;
+      if (d.key === "dimUnit" && sides.length > 1) continue;
+      lines.push(many ? `${prefix}${d.line.charAt(0).toLowerCase()}${d.line.slice(1)}` : d.line);
+    }
+  });
+  a.boxes.forEach((box, i) => {
+    if (!b.boxes.some((x) => x.id === box.id)) lines.push(`Remove ${boxLabel(i)} (${boxSummary(box.specs)})`);
+  });
+  for (const d of fieldDiff(a.terms, b.terms)) lines.push(d.line);
+  if (a.stage !== b.stage) lines.push(`Stage: ${a.stage} → ${b.stage}`);
+  return lines;
+}
+
+/** The card after an edit (same rules the server uses when it applies the plan). */
+export function applyEdit(card: CardState, edit: Pick<CardEdit, "customer" | "terms" | "set" | "add" | "remove">, newId: () => string): CardState {
+  const boxes: Box[] = card.boxes
+    .filter((b) => !edit.remove.includes(b.id))
+    .map((b) => {
+      const set = edit.set.find((s) => s.id === b.id);
+      if (!set) return b;
+      const specs: Specs = { ...b.specs };
+      for (const [k, v] of Object.entries(set.values) as [FieldKey, SpecValue][]) {
+        if (v === null) delete specs[k];
+        else specs[k] = v;
+      }
+      return { ...b, specs };
+    });
+  for (const specs of edit.add) boxes.push({ id: newId(), specs: { ...specs } });
+  const merge = (base: Specs, values: Specs): Specs => {
+    const out = { ...base };
+    for (const [k, v] of Object.entries(values) as [FieldKey, SpecValue][]) {
+      if (k === "company") continue; // renaming a customer is not done by voice
+      if (v === null) delete out[k];
+      else out[k] = v;
+    }
+    return out;
+  };
+  return { ...card, customer: merge(card.customer, edit.customer), terms: merge(card.terms, edit.terms), boxes };
+}
+
+/** The quotation totals a card would give, for the plan (none until it can be built). */
+export function totalsLines(card: CardState, stateCode: string): string[] {
+  const gaps = quoteGaps(card);
+  if (gaps.forDraft.length > 0) return [];
+  const q = buildQuote(card, stateCode);
+  const boxCount = q.lines.filter((l) => lineOwner(l.itemId).charge === null).length;
+  let n = 0;
+  const lines = q.lines.map((l) => {
+    const owner = lineOwner(l.itemId);
+    if (owner.charge) return `${l.title}${l.detail ? ` ${l.detail.toLowerCase()}` : ""}: ${formatINR(l.amountPaise)}`;
+    const name = boxCount > 1 ? `${boxLabel(n)}: ` : "";
+    n += 1;
+    return `${name}${l.quantity.toLocaleString("en-IN")} × ${formatINR(l.ratePaise)} = ${formatINR(l.amountPaise)}`;
+  });
+  const t = q.totals;
+  lines.push(
+    q.gstMode === "intra" ? `CGST ${q.gstPercent / 2}% + SGST ${q.gstPercent / 2}%: ${formatINR(t.gstPaise)}` : `IGST ${q.gstPercent}%: ${formatINR(t.gstPaise)}`,
+  );
+  if (t.roundOffPaise !== 0) lines.push(`Round off: ${formatINR(t.roundOffPaise)}`);
+  lines.push(`Total: ${formatINR(t.totalPaise)}`);
+  return lines;
+}
+
+/** A new enquiry with its boxes. */
+export function buildCreatePlan(newCard: NewCard, unclear: readonly string[], existing: ExistingCustomer | null, ref = "New"): PlanView {
+  const company = typeof newCard.customer.company === "string" ? newCard.customer.company : existing?.company;
+  const customer: Specs = { ...(existing ?? {}), ...newCard.customer, ...(company ? { company } : {}) };
+  const card: CardState = {
+    ref,
+    stage: "New",
+    customer,
+    terms: newCard.terms,
+    boxes: newCard.boxes.map((specs, i) => ({ id: `new${i}`, specs })),
+  };
+  const lines: string[] = [];
+  if (company) lines.push(existing ? `Customer: ${existing.company} (already in your list)` : `Customer: ${company} (new customer)`);
+  for (const k of ["contactPerson", "phone", "gstin", "address"] as const) {
+    const v = newCard.customer[k];
+    if (v === undefined || v === null) continue;
+    const before = existing?.[k];
+    lines.push(before && before !== v ? `${label(k)}: ${v} (was ${before})` : `${label(k)}: ${v}`);
+  }
+  card.boxes.forEach((b, i) => lines.push(`${boxLabel(i)}: ${boxSummary(b.specs)}`));
+  for (const d of fieldDiff({}, newCard.terms)) lines.push(d.line);
+
+  const missing = cardMissing(customer, card.boxes);
+  if (missing.length > 0) {
+    const names = [...new Set(missing.map((k) => (["length", "breadth", "height"].includes(k) ? "Size" : label(k))))];
+    lines.push(`Not said: ${names.join(", ")}`);
+  }
+  const warnings = [...newCard.warnings, ...unclear.map((u) => `Unclear: ${u}`)];
+  if (!company) warnings.push("No company name heard. Say the customer's company name.");
+  const n = card.boxes.length;
+  return {
+    title: company ? `New enquiry from ${company}${n > 1 ? ` (${n} boxes)` : ""}` : "New enquiry",
+    lines,
+    warnings,
+    card: previewCard(card),
+  };
+}
+
 /**
- * An edit plan: "Height: 8 inch → 9 inch". Only values that change are listed;
- * repeating the current value is reported, not planned.
- * Returns null "set" when nothing would change.
+ * An edit, add/remove of boxes, or the owner's rate and terms. Returns the
+ * card after the change so the server applies exactly what was shown.
  */
 export function buildEditPlan(
   card: CardState,
-  guarded: GuardedRequest,
+  edit: CardEdit,
   unclear: readonly string[],
-): PlanView & { set: Partial<Record<FieldKey, SpecValue>> } {
-  const set: Partial<Record<FieldKey, SpecValue>> = {};
-  const lines: string[] = [];
-  const warnings: string[] = [];
-  const incoming: Partial<Record<FieldKey, SpecValue>> = { ...guarded.specs, ...guarded.customer };
-
-  // A unit said with one side ("height 9 inch") only tells how to read that side;
-  // it changes the card's unit only if the card had none or all three sides were said.
-  const sidesSaid = SIDES.filter((k) => incoming[k] !== undefined).length;
-  if (incoming.dimUnit !== undefined && card.specs.dimUnit && sidesSaid < 3) delete incoming.dimUnit;
-
-  if (incoming.company !== undefined && incoming.company !== card.specs.company) {
-    warnings.push(`Left out company “${String(incoming.company)}”: renaming a customer isn't supported yet.`);
+  opts: {
+    rate?: boolean;
+    /** Your GSTIN's state code (CGST+SGST or IGST). */
+    stateCode?: string;
+    /** How the formula worked out each rate, shown before the totals. */
+    formula?: readonly string[];
+  } = {},
+): PlanView & { after: CardState; empty: boolean } {
+  let n = 0;
+  const after = applyEdit(card, edit, () => `added${n++}`);
+  const lines = diffLines(card, after);
+  const warnings = [...edit.warnings, ...unclear.map((u) => `Unclear: ${u}`)];
+  if (typeof edit.customer.company === "string" && edit.customer.company !== card.customer.company) {
+    warnings.push(`Left out company “${edit.customer.company}”: renaming a customer isn't supported yet.`);
   }
-  delete incoming.company;
-
-  const after: Specs = { ...card.specs };
-  for (const [k, v] of Object.entries(incoming) as [FieldKey, SpecValue][]) {
-    if (v === undefined) continue;
-    if (card.specs[k] === v) {
-      warnings.push(`${getField(k)?.label ?? k} is already ${display(k, v, card.specs)}.`);
-      continue;
-    }
-    set[k] = v;
-    after[k] = v;
+  lines.push(...(opts.formula ?? []));
+  if (opts.rate) {
+    lines.push(...totalsLines(after, opts.stateCode ?? stateCodeOf(DEFAULT_COMPANY)));
+    const gaps = quoteGaps(after);
+    if (gaps.forDraft.length > 0) warnings.push(`For the totals, still say: ${gaps.forDraft.join("; ")}.`);
+    else if (gaps.forApproval.length > 0) lines.push(`Still needed before approval: ${gaps.forApproval.join(", ")}`);
   }
-  // Lines follow the order of lib/fields.ts, like the card.
-  for (const f of FIELD_DEFS) {
-    const k = f.key as FieldKey;
-    const v = set[k];
-    if (v === undefined) continue;
-    const label = f.label;
-    const before = card.specs[k];
-    lines.push(
-      before === undefined || before === null
-        ? `${label}: ${display(k, v, after)}`
-        : `${label}: ${display(k, before, card.specs)} → ${display(k, v, after)}`,
-    );
-  }
-  if (guarded.sizeWithoutUnit) {
-    warnings.push("A size was said without a unit and this card has none yet. Say “inch”, “cm” or “mm”.");
-  }
-  for (const d of guarded.dropped) {
-    warnings.push(`Left out ${getField(d.field)?.label ?? d.field} “${d.value}”: ${d.reason}.`);
-  }
-  for (const note of unclear) warnings.push(`Unclear: ${note}`);
-
+  const company = String(card.customer.company ?? "");
   return {
-    title: `Change ${card.ref} ${String(card.specs.company ?? "")}`.trim(),
+    title: `${opts.rate ? "Rates for" : "Change"} ${card.ref} ${company}`.trim(),
     lines,
     warnings,
-    card: viewAfter(card, after, card.stage),
-    set,
+    card: previewCard(after),
+    after,
+    empty: diffLines(card, after).length === 0,
   };
 }
 
 export function buildStagePlan(card: CardState, stage: Stage): PlanView {
   return {
-    title: `Move ${card.ref} ${String(card.specs.company ?? "")}`.trim(),
+    title: `Move ${card.ref} ${String(card.customer.company ?? "")}`.trim(),
     lines: [`Stage: ${card.stage} → ${stage}`],
     warnings: card.stage === stage ? [`It is already ${stage}.`] : [],
-    card: viewAfter(card, card.specs, stage),
+    card: previewCard(card, stage),
   };
-}
-
-/**
- * The owner's rate and terms: the edit lines, then the totals worked out by
- * code, then what is still needed before the quotation can be approved.
- */
-export function buildRatePlan(
-  card: CardState,
-  guarded: GuardedRequest,
-  unclear: readonly string[],
-): PlanView & { set: Partial<Record<FieldKey, SpecValue>> } {
-  const plan = buildEditPlan(card, guarded, unclear);
-  plan.title = `Rate for ${card.ref} ${String(card.specs.company ?? "")}`.trim();
-  const after: Specs = { ...card.specs, ...plan.set };
-  const needDraft = missingFor(after, DRAFT_FIELDS);
-  if (needDraft.length === 0) {
-    const q = buildQuoteSnapshot(after, COMPANY.stateCode);
-    const t = q.totals;
-    plan.lines.push(`Subtotal, ${q.quantity.toLocaleString("en-IN")} × ${formatINR(q.ratePaise)}: ${formatINR(t.subtotalPaise)}`);
-    if (q.gstMode === "intra") {
-      plan.lines.push(`CGST ${q.gstPercent / 2}% + SGST ${q.gstPercent / 2}%: ${formatINR(t.gstPaise)}`);
-    } else {
-      plan.lines.push(`IGST ${q.gstPercent}%: ${formatINR(t.gstPaise)}`);
-    }
-    if (t.roundOffPaise !== 0) plan.lines.push(`Round off: ${formatINR(t.roundOffPaise)}`);
-    plan.lines.push(`Total: ${formatINR(t.totalPaise)}`);
-  } else {
-    plan.warnings.push(`For the totals, still say: ${needDraft.map((k) => getField(k)?.label ?? k).join(", ")}.`);
-  }
-  const needQuote = missingFor(after, QUOTE_FIELDS).filter((k) => !needDraft.includes(k));
-  if (needQuote.length > 0) {
-    plan.lines.push(`Still needed before approval: ${needQuote.map((k) => getField(k)?.label ?? k).join(", ")}`);
-  }
-  return plan;
 }
 
 export interface UndoEntry {
   action: "create" | "edit" | "stage" | "quote";
   summary: string;
-  changes: { field: FieldKey; before: SpecValue; after: SpecValue }[];
+  /** For edits: the card as it was before. */
+  before?: CardState;
   stageBefore?: Stage;
   stageAfter?: Stage;
 }
 
 /** What undoing one history entry will do. */
 export function buildUndoPlan(card: CardState, entry: UndoEntry): PlanView {
-  const title = `Undo on ${card.ref} ${String(card.specs.company ?? "")}`.trim();
+  const title = `Undo on ${card.ref} ${String(card.customer.company ?? "")}`.trim();
   if (entry.action === "create") {
-    return {
-      title,
-      lines: [`Remove card ${card.ref} ${String(card.specs.company ?? "")} (it was just made)`],
-      warnings: [],
-      card: viewAfter(card, card.specs, card.stage),
-    };
+    return { title, lines: [`Remove card ${card.ref} ${String(card.customer.company ?? "")} (it was just made)`], warnings: [], card: previewCard(card) };
   }
   if (entry.action === "quote") {
     return {
       title,
       lines: [`Take back approval: ${entry.summary.replace(/^Approved /, "")} goes back to draft`, `Stage: ${entry.stageAfter ?? card.stage} → ${entry.stageBefore ?? "New"}`],
       warnings: [],
-      card: viewAfter(card, card.specs, entry.stageBefore ?? "New"),
+      card: previewCard(card, entry.stageBefore ?? "New"),
     };
   }
   if (entry.action === "stage") {
-    return {
-      title,
-      lines: [`Stage: ${entry.stageAfter ?? card.stage} → ${entry.stageBefore ?? "New"}`],
-      warnings: [],
-      card: viewAfter(card, card.specs, entry.stageBefore ?? "New"),
-    };
+    return { title, lines: [`Stage: ${entry.stageAfter ?? card.stage} → ${entry.stageBefore ?? "New"}`], warnings: [], card: previewCard(card, entry.stageBefore ?? "New") };
   }
-  const after: Specs = { ...card.specs };
-  const lines: string[] = [];
-  for (const c of entry.changes) {
-    after[c.field] = c.before ?? undefined;
-    const label = getField(c.field)?.label ?? c.field;
-    lines.push(`${label}: ${display(c.field, card.specs[c.field] ?? null, card.specs)} → ${c.before === null ? "not set" : display(c.field, c.before, after)}`);
-  }
-  return { title, lines, warnings: [], card: viewAfter(card, after, card.stage) };
+  if (!entry.before) return { title, lines: ["This change can't be undone (it was made before boxes were added)."], warnings: [], card: previewCard(card) };
+  const before = { ...entry.before, ref: card.ref, stage: card.stage };
+  return { title, lines: diffLines(card, before), warnings: [], card: previewCard(before) };
 }

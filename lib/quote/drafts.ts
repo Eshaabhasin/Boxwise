@@ -1,88 +1,109 @@
 import "server-only";
 import { randomBytes } from "node:crypto";
 import type { HydratedDocument, Types } from "mongoose";
-import { mergedSpecs } from "@/lib/commands/cards";
-import { COMPANY } from "@/lib/company";
-import { getField, type FieldKey } from "@/lib/fields";
-import { PendingPlan, Quotation, type CustomerDoc, type QuotationDoc, type RequestDoc } from "@/lib/models";
-import { formatINR } from "@/lib/calc/money";
 import { buildCardView } from "@/lib/board";
-import { DRAFT_FIELDS, QUOTE_FIELDS, buildQuoteSnapshot, missingFor } from "@/lib/quote/build";
-import { requestRef } from "@/lib/commands/plan";
+import { requestRef, type CardState } from "@/lib/card";
+import { formatINR } from "@/lib/calc/money";
+import { stateCodeOf } from "@/lib/company";
+import { getCompany } from "@/lib/settings";
+import { PendingPlan, Quotation, type QuotationDoc, type RequestDoc } from "@/lib/models";
+import { buildQuote, quoteGaps, type BuiltQuote, type QuoteGaps } from "@/lib/quote/build";
 
 /**
- * Draft quotations: rebuilt from the card whenever the rate, terms or spec
- * change, until the owner approves one. Approved quotations are never touched.
+ * The working quotation of a card: a draft until approved, still editable once
+ * approved, frozen once sent. It is rebuilt from the card whenever the card
+ * changes, keeping its number, status and any wording typed over on it.
+ * A change after it was sent starts a new revision (…-R1), so what the
+ * customer received never changes.
  */
 
 const PLAN_TTL_MS = 24 * 60 * 60 * 1000;
 
+type QuoteDoc = HydratedDocument<QuotationDoc>;
+
+/** The newest quotation of a card, whatever its status (what the card screen shows). */
 export async function latestQuotation(requestId: Types.ObjectId | string) {
   return Quotation.findOne({ requestId }).sort({ createdAt: -1 });
 }
 
-export async function hasDraft(requestId: Types.ObjectId | string): Promise<boolean> {
-  return (await Quotation.exists({ requestId, status: "Draft" })) !== null;
+/** The quotation still being worked on (draft or approved, not yet sent). */
+export async function workingQuotation(requestId: Types.ObjectId | string): Promise<QuoteDoc | null> {
+  return Quotation.findOne({ requestId, status: { $in: ["Draft", "Approved"] } }).sort({ createdAt: -1 });
 }
 
-export interface DraftResult {
-  draft: HydratedDocument<QuotationDoc> | null;
-  /** Fields still missing for a draft (rate, GST, quantity). */
-  missingForDraft: FieldKey[];
-  /** Fields still missing before approval (terms). */
-  missingForApproval: FieldKey[];
+/** Copies a freshly built quotation into the document (status, number and typed-over wording stay). */
+export function fillQuotation(q: QuoteDoc, built: BuiltQuote): void {
+  q.customerSnapshot = built.customerSnapshot;
+  q.lines = built.lines;
+  q.subtotalPaise = built.totals.subtotalPaise;
+  q.gstPercent = built.gstPercent;
+  q.gstMode = built.gstMode;
+  q.cgstPaise = built.totals.cgstPaise;
+  q.sgstPaise = built.totals.sgstPaise;
+  q.igstPaise = built.totals.igstPaise;
+  q.roundOffPaise = built.totals.roundOffPaise;
+  q.totalPaise = built.totals.totalPaise;
+  q.terms = built.terms;
+  q.markModified("lines");
+}
+
+export interface SyncResult {
+  quote: QuoteDoc | null;
+  gaps: QuoteGaps;
+}
+
+async function supersedeApproval(requestId: Types.ObjectId): Promise<void> {
+  await PendingPlan.updateMany({ action: "approve_quote", requestId, status: "pending" }, { status: "superseded" });
 }
 
 /**
- * Throws away the old draft (if any) and makes a new one from the card as it is now.
- * Also replaces the waiting "approve quotation" plan, so "approve" always means this draft.
+ * Brings the working quotation in line with the card. Creates a draft when the
+ * card first has everything a quotation needs; removes a draft that can no
+ * longer be built; starts a revision when the last one was already sent.
+ * Puts up the "approve" plan for a complete draft.
  */
-export async function refreshDraft(
-  request: HydratedDocument<RequestDoc>,
-  customer: CustomerDoc | null,
-): Promise<DraftResult> {
-  await Quotation.deleteMany({ requestId: request._id, status: "Draft" });
-  await PendingPlan.updateMany({ action: "approve_quote", requestId: request._id, status: "pending" }, { status: "superseded" });
+export async function syncQuotation(request: HydratedDocument<RequestDoc>, state: CardState): Promise<SyncResult> {
+  const gaps = quoteGaps(state);
+  let quote = await workingQuotation(request._id);
 
-  const specs = mergedSpecs(request, customer);
-  const missingForDraft = missingFor(specs, DRAFT_FIELDS);
-  const missingForApproval = missingFor(specs, QUOTE_FIELDS).filter((k) => !missingForDraft.includes(k));
-  if (missingForDraft.length > 0) return { draft: null, missingForDraft, missingForApproval };
+  if (gaps.forDraft.length > 0) {
+    if (quote && quote.status === "Draft") {
+      await quote.deleteOne();
+      await supersedeApproval(request._id);
+      quote = null;
+    }
+    return { quote, gaps };
+  }
 
-  const snap = buildQuoteSnapshot(specs, COMPANY.stateCode);
-  // The number is given on approval; an earlier approved-then-undone quotation keeps its number.
-  const draft = await Quotation.create({
-    requestId: request._id,
-    customerId: request.customerId,
-    customerSnapshot: snap.customerSnapshot,
-    specsSnapshot: snap.specsSnapshot,
-    quantity: snap.quantity,
-    ratePaise: snap.ratePaise,
-    subtotalPaise: snap.totals.subtotalPaise,
-    gstPercent: snap.gstPercent,
-    gstMode: snap.gstMode,
-    cgstPaise: snap.totals.cgstPaise,
-    sgstPaise: snap.totals.sgstPaise,
-    igstPaise: snap.totals.igstPaise,
-    roundOffPaise: snap.totals.roundOffPaise,
-    totalPaise: snap.totals.totalPaise,
-    terms: snap.terms,
-    itemTitle: snap.itemTitle,
-    itemDetail: snap.itemDetail,
-    status: "Draft",
-    shareToken: randomBytes(18).toString("base64url"),
-  });
+  if (!quote) {
+    const lastSent = await Quotation.findOne({ requestId: request._id, status: "Sent" }).sort({ createdAt: -1 });
+    quote = new Quotation({
+      requestId: request._id,
+      customerId: request.customerId,
+      status: "Draft",
+      shareToken: randomBytes(18).toString("base64url"),
+      revision: lastSent ? lastSent.revision + 1 : 0,
+      revises: lastSent?._id,
+      lineText: lastSent?.lineText ?? {},
+      notes: lastSent?.notes ?? "",
+    });
+  }
+  fillQuotation(quote, buildQuote(state, stateCodeOf(await getCompany()), quote.lineText ?? {}));
+  await quote.save();
 
-  if (missingForApproval.length === 0) await offerApproval(request, draft);
-  return { draft, missingForDraft, missingForApproval };
+  if (quote.status === "Draft" && gaps.forApproval.length === 0) await offerApproval(request, quote);
+  else await supersedeApproval(request._id);
+  return { quote, gaps };
 }
 
 /** Puts up the "approve this quotation" plan, so the owner's "approve" numbers this draft. */
-export async function offerApproval(request: HydratedDocument<RequestDoc>, draft: HydratedDocument<QuotationDoc>): Promise<void> {
-  await PendingPlan.updateMany({ action: "approve_quote", requestId: request._id, status: "pending" }, { status: "superseded" });
+export async function offerApproval(request: HydratedDocument<RequestDoc>, draft: QuoteDoc): Promise<void> {
+  await supersedeApproval(request._id);
+  const boxes = draft.lines.length;
   const lines = [
-    `Quotation for ${draft.customerSnapshot.company}`,
-    `${draft.quantity.toLocaleString("en-IN")} × ${formatINR(draft.ratePaise)} + ${draft.gstPercent}% GST = ${formatINR(draft.totalPaise)}`,
+    `Quotation for ${draft.customerSnapshot.company}${boxes > 1 ? `, ${boxes} boxes` : ""}`,
+    ...draft.lines.map((l) => `${l.title}: ${l.quantity.toLocaleString("en-IN")} × ${formatINR(l.ratePaise)} = ${formatINR(l.amountPaise)}`),
+    `Total with ${draft.gstPercent}% GST: ${formatINR(draft.totalPaise)}`,
     draft.number ? `Keeps its number ${draft.number}. Nothing is sent yet.` : "It gets its number when you approve. Nothing is sent yet.",
   ];
   const card = buildCardView({
@@ -90,7 +111,7 @@ export async function offerApproval(request: HydratedDocument<RequestDoc>, draft
     number: request.number,
     customerName: request.customerName,
     stage: request.stage,
-    specs: request.specs,
+    boxes: request.items,
     missing: request.missing,
     hasDraftQuote: true,
   });
@@ -111,6 +132,7 @@ export async function offerApproval(request: HydratedDocument<RequestDoc>, draft
   });
 }
 
-export function describeMissing(keys: readonly FieldKey[]): string {
-  return keys.map((k) => getField(k)?.label ?? k).join(", ");
+/** One sentence of what is still needed, for messages. */
+export function describeGaps(gaps: QuoteGaps): string {
+  return [...gaps.forDraft, ...gaps.forApproval].join("; ");
 }

@@ -25,6 +25,8 @@ export interface GuardedRequest {
   /** Size as spoken when no unit was said, so the plan can ask for it. */
   sizeWithoutUnit: { length?: number; breadth?: number; height?: number } | null;
   dropped: Dropped[];
+  /** Choices kept from GPT's reading although none of their usual words were said: the plan asks him to check them. */
+  unsure?: { field: FieldKey; value: string }[];
 }
 
 const GSTIN = /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]$/;
@@ -77,7 +79,7 @@ function moneyWasSaid(rupees: number, text: string): boolean {
   return false;
 }
 
-function matchOption(field: FieldDef, raw: string, text: string): string | { reason: string } {
+function matchOption(field: FieldDef, raw: string, text: string): string | { reason: string } | { unsure: string } {
   const options = field.options ?? [];
   const lowerRaw = raw.trim().toLowerCase();
   const option =
@@ -87,8 +89,13 @@ function matchOption(field: FieldDef, raw: string, text: string): string | { rea
   const spoken = [option, ...(field.optionAliases?.[option] ?? [])];
   // Single letters (flute "B") only count with their aliases ("B flute"), never alone.
   const evidence = spoken.filter((s) => s.length > 1 || !field.optionAliases);
-  if (!evidence.some((s) => hasPhrase(text, s))) return { reason: "not heard in what you said" };
-  return option;
+  if (evidence.some((s) => hasPhrase(text, s))) return option;
+  // Some choices are said in too many ways to list ("we don't have any design"): the topic was said,
+  // so the reading is kept, and the plan shows it for "approve" or a correction.
+  if (field.topic?.some((t) => hasPhrase(text, t))) return option;
+  // A choice GPT read from his own way of saying it: kept, and pointed out in the plan.
+  if (field.trustReading) return { unsure: option };
+  return { reason: "not heard in what you said" };
 }
 
 /**
@@ -110,8 +117,8 @@ export function guardRequestFields(
   for (const [key, value] of Object.entries(fields)) {
     if (value === null || value === "" || value === undefined) continue;
     const field = getField(key);
-    if (!field) {
-      drop(key, value, "not a field BoxBol knows");
+    if (!field || field.internal) {
+      drop(key, value, "not a field Boxwise knows");
       continue;
     }
     if (field.ownerOnly && !opts.allowRate) {
@@ -150,7 +157,10 @@ export function guardRequestFields(
       case "enum": {
         const m = matchOption(field, String(value), text);
         if (typeof m === "string") out.specs[k] = m;
-        else drop(key, value, m.reason);
+        else if ("unsure" in m) {
+          out.specs[k] = m.unsure;
+          (out.unsure ??= []).push({ field: k, value: m.unsure });
+        } else drop(key, value, m.reason);
         break;
       }
       case "int":
@@ -193,5 +203,13 @@ export function guardRequestFields(
   } else if (sides) {
     out.sizeWithoutUnit = spokenSides;
   }
+
+  // "inner carton" names the box type; it says nothing about inner or outer size.
+  if (out.specs.sizeType === "Inner" && hasPhrase(text, "inner carton") && !hasPhrase(text, "inner size")) delete out.specs.sizeType;
+
+  // "2 colour" is printed and "plain" is 0 colours: code keeps the two print fields in step.
+  const colours = out.specs.printColours;
+  if (typeof colours === "number" && out.specs.print === undefined) out.specs.print = colours > 0 ? "Multi-colour" : "Plain";
+  if (out.specs.print === "Plain" && out.specs.printColours === undefined) out.specs.printColours = 0;
   return out;
 }

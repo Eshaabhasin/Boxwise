@@ -1,4 +1,4 @@
-import { FIELD_DEFS, type FieldDef } from "@/lib/fields";
+import { SPOKEN_FIELD_DEFS, type FieldDef } from "@/lib/fields";
 import type { ChatMessage } from "@/lib/nlp/llm";
 
 /**
@@ -32,14 +32,14 @@ function describe(f: FieldDef): string {
 
 export function systemPrompt(): string {
   return `You read commands that a corrugated box factory owner in India dictates by voice (Hinglish, no punctuation, numbers already digits) and return one JSON object:
-{"intent", "target", "stage", "query", "filter", "fields": {key: value}, "unclear": [notes]}
-Each message gives the screen he is on, then what he said.
+{"intent", "target", "stage", "query", "filter", "fields": {key: value}, "boxes": [{"box", "fields"}], "allBoxes", "remove": [n], "unclear": [notes]}
+Each message gives the screen he is on (and how many boxes the card has), then what he said.
 
 Intents:
 - create_request: a new box request from a customer.
 - repeat_request: new card copying a customer's last order ("same as last time for X"). target = company; fields = only what changes.
 - edit_request: change an existing card. fields = only the changed fields.
-- set_rate: his own rate and/or terms for a card (ratePerBox, gstPercent, deliveryTime, paymentTerms, validity, plus anything else he changes).
+- set_rate: his own rate and/or terms for a card (ratePerBox, gstPercent, deliveryTime, paymentTerms, validity). Every other field said in the same sentence (quantity, size, ply…) goes in fields too; never drop one.
 - search: find cards or quotations. query = company words or null; filter = Pending|New|Quoted|Sent|Won|Lost|All or null.
 - open: open one card.
 - set_stage: stage = Won ("order mil gaya"), Lost ("mana kar diya", "order nahi mila") or New.
@@ -54,9 +54,12 @@ Rules:
 5. company = the customer's name as said, capitalised; not "ke liye", "ka", "se", "naya order". A name that only picks the card goes in target.
 6. "Earlier: ... Correction: ..." means apply the correction to the earlier command and return the full result, same intent.
 7. Terms are short text in his words ("10 days", "30 din credit").
+8. "<number> box / boxes / piece / pcs / nag" is the quantity (how many pieces), wherever it comes in the sentence. It is never the number of different boxes: different boxes are told apart by their own sizes or by "pehla / doosra / box 1 / box 2". One enquiry can ask for several boxes. Customer, GST and terms go in top-level fields. Each box goes in "boxes" in the order said, with box = null for a new enquiry. Details said once for every box ("sab 5 ply", "dono stitched") go in top-level fields with allBoxes true.
+9. One box only: its fields may stay in top-level fields.
+10. On a card with several boxes: box = the box number he names (pehla 1, doosra 2, teesra 3, chautha 4); a box he adds: box = "new"; boxes he removes: "remove": [n].
 
 Fields:
-${FIELD_DEFS.map(describe).join("\n")}`;
+${SPOKEN_FIELD_DEFS.map(describe).join("\n")}`;
 }
 
 export type Screen = string;
@@ -85,13 +88,13 @@ export const FEW_SHOTS: readonly [Screen, string, object][] = [
   ],
   [
     "board",
-    "Mehta Plastics outer size 18 by 12 by 12 inch 7 ply BC flute die cut 250 pieces lamination chahiye",
-    { intent: "create_request", fields: { company: "Mehta Plastics", sizeType: "Outer", length: 18, breadth: 12, height: 12, dimUnit: "inch", ply: 7, flute: "BC", style: "Die-cut", quantity: 250, coating: "Lamination" } },
+    "Mehta Plastics self lock box outer size 18 by 12 by 12 inch 7 ply brown BC flute 250 pieces multicolour lamination chahiye",
+    { intent: "create_request", fields: { company: "Mehta Plastics", boxType: "Self-lock", sizeType: "Outer", length: 18, breadth: 12, height: 12, dimUnit: "inch", ply: 7, colour: "Brown", flute: "BC", quantity: 250, print: "Multi-colour", coating: "Lamination" } },
   ],
   [
     "new quote",
-    "Shree Ganesh Traders address plot 12 MIDC Bhiwandi GST number 27AAPFU0939F1ZV 5000 box 8 by 6 by 4 inch RSC",
-    { intent: "create_request", fields: { company: "Shree Ganesh Traders", address: "Plot 12, MIDC, Bhiwandi", gstin: "27AAPFU0939F1ZV", quantity: 5000, length: 8, breadth: 6, height: 4, dimUnit: "inch", style: "RSC" } },
+    "Shree Ganesh Traders address plot 12 MIDC Bhiwandi GST number 27AAPFU0939F1ZV 5000 carton 8 by 6 by 4 inch white no lamination",
+    { intent: "create_request", fields: { company: "Shree Ganesh Traders", address: "Plot 12, MIDC, Bhiwandi", gstin: "27AAPFU0939F1ZV", quantity: 5000, boxType: "Carton", length: 8, breadth: 6, height: 4, dimUnit: "inch", colour: "White", coating: "None" } },
   ],
   [
     "new quote",
@@ -120,23 +123,37 @@ export const FEW_SHOTS: readonly [Screen, string, object][] = [
   ],
   [
     "card REQ-001 Sharma Packaging",
-    "rate 18 rupees per box GST 18 percent delivery 10 days payment 50 percent advance validity 15 din",
-    { intent: "set_rate", fields: { ratePerBox: 18, gstPercent: 18, deliveryTime: "10 days", paymentTerms: "50 percent advance", validity: "15 din" } },
+    "quantity 1000 rate 18 rupees per box GST 18 percent delivery 10 days payment 50 percent advance validity 15 din",
+    { intent: "set_rate", fields: { quantity: 1000, ratePerBox: 18, gstPercent: 18, deliveryTime: "10 days", paymentTerms: "50 percent advance", validity: "15 din" } },
   ],
   [
-    "board",
-    "Gupta Foods ka rate 9 rupees 50 paise aur 1000 box kar do",
-    { intent: "set_rate", target: "Gupta Foods", fields: { ratePerBox: 9.5, quantity: 1000 } },
+    "new quote",
+    "Gupta Foods ke 3 box chahiye pehla 12 by 10 by 8 inch 500 piece doosra 18 by 12 by 10 inch 300 piece teesra 10 by 10 by 4 inch 1000 piece sab 5 ply stitched",
+    {
+      intent: "create_request",
+      fields: { company: "Gupta Foods", ply: 5, joint: "Stitched" },
+      allBoxes: true,
+      boxes: [
+        { box: null, fields: { length: 12, breadth: 10, height: 8, dimUnit: "inch", quantity: 500 } },
+        { box: null, fields: { length: 18, breadth: 12, height: 10, dimUnit: "inch", quantity: 300 } },
+        { box: null, fields: { length: 10, breadth: 10, height: 4, dimUnit: "inch", quantity: 1000 } },
+      ],
+    },
+  ],
+  [
+    "card REQ-004 Gupta Foods (3 boxes)",
+    "doosre box ki height 11 inch kar do teesra hata do aur ek naya box 14 by 10 by 6 inch 800 piece",
+    { intent: "edit_request", boxes: [{ box: 2, fields: { height: 11, dimUnit: "inch" } }, { box: "new", fields: { length: 14, breadth: 10, height: 6, dimUnit: "inch", quantity: 800 } }], remove: [3] },
+  ],
+  [
+    "card REQ-004 Gupta Foods (3 boxes)",
+    "pehle box ka rate 18 doosre ka 22 teesre ka 9 rupees 50 paise GST 18 percent",
+    { intent: "set_rate", fields: { gstPercent: 18 }, boxes: [{ box: 1, fields: { ratePerBox: 18 } }, { box: 2, fields: { ratePerBox: 22 } }, { box: 3, fields: { ratePerBox: 9.5 } }] },
   ],
   [
     "new quote",
     "Gupta Foods wala pichla order phir se bas 2000 box",
     { intent: "repeat_request", target: "Gupta Foods", fields: { quantity: 2000 } },
-  ],
-  [
-    "quotation history",
-    "Mehta Plastics ki history",
-    { intent: "search", query: "Mehta Plastics" },
   ],
   [
     "card REQ-003 Gupta Foods",

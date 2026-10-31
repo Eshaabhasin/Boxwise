@@ -1,23 +1,31 @@
 @import "tailwindcss";
 
 /*
- * BoxBol theme: kraft-paper screens from the reference PDF, with the big
- * tight headline type of the Wispr Challenge page. Hard offset shadows, no blur.
+ * Boxwise theme: the colours of a corrugated box. Light cream page, cream
+ * panels like the inner liner, deep brown buttons, and the big tight
+ * headline type of the Wispr Challenge page for page titles.
  */
 @theme inline {
-  --font-display: var(--font-inter-tight), "Arial Narrow", sans-serif;
+  --font-display: var(--font-inter-tight), system-ui, sans-serif;
   --font-sans: var(--font-inter), system-ui, sans-serif;
-  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
 
-  --color-kraft: #c9a677;
-  --color-kraft-2: #d8b98c;
-  --color-flap: #b48a58;
-  --color-cream: #f6ecd6;
-  --color-paper: #fbf4e4;
-  --color-rule: #e7d6b4;
-  --color-ink: #2a1a10;
-  --color-ink-2: #5a4330;
-  --color-brick: #9c2f1c;
+  --color-page: #f8f2e8;
+  --color-panel: #fffaf2;
+  --color-sunk: #f4eadb;
+  --color-line: #e2d0b5;
+  --color-line-strong: #cfb48e;
+  --color-ink: #2a1c10;
+  --color-ink-2: #5e4631;
+  --color-ink-3: #8c7258;
+  --color-brand: #8b5a2b;
+  --color-brand-dark: #6f4520;
+  --color-brand-soft: #f3e3cc;
+  --color-ok: #1f7a4d;
+  --color-ok-soft: #e6f4ec;
+  --color-warn: #9a5b00;
+  --color-warn-soft: #fdf3e1;
+  --color-bad: #b42318;
+  --color-bad-soft: #fdecea;
 }
 
 :root {
@@ -25,45 +33,445 @@
 }
 
 body {
-  background: var(--color-kraft);
+  background: var(--color-page);
   color: var(--color-ink);
   font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01";
 }
 
-@utility flap {
-  /* The striped cardboard flap at the top and bottom of a box card. */
-  background-color: var(--color-flap);
-  background-image: repeating-linear-gradient(
-    90deg,
-    rgb(42 26 16 / 0.35) 0 1px,
-    transparent 1px 5px
-  );
+@utility panel {
+  background: var(--color-panel);
+  border: 1px solid var(--color-line);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgb(42 28 16 / 0.06);
 }
 
-@utility ruled {
-  /* Notebook lines behind the dictation text. Line height must match --rule-gap. */
-  --rule-gap: 2rem;
-  background-color: var(--color-paper);
-  background-image: repeating-linear-gradient(
-    180deg,
-    transparent 0 calc(var(--rule-gap) - 1px),
-    var(--color-rule) calc(var(--rule-gap) - 1px) var(--rule-gap)
-  );
-  background-attachment: local;
-  line-height: var(--rule-gap);
-}
-
-@utility hard-shadow {
-  box-shadow: 4px 4px 0 0 rgb(42 26 16 / 0.85);
-}
-
-@utility hard-shadow-sm {
-  box-shadow: 3px 3px 0 0 rgb(42 26 16 / 0.85);
-}
-
-@utility eyebrow {
-  font-family: var(--font-mono);
+@utility label-xs {
   font-size: 0.72rem;
-  letter-spacing: 0.14em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+  color: var(--color-ink-3);
+}
+
+@utility btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 8px;
+  padding: 0.55rem 1rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+  transition: background-color 120ms, border-color 120ms;
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+@utility btn-primary {
+  background: var(--color-brand);
+  color: #fff;
+  &:hover:not(:disabled) {
+    background: var(--color-brand-dark);
+  }
+}
+
+@utility btn-quiet {
+  background: var(--color-panel);
+  color: var(--color-ink);
+  border: 1px solid var(--color-line-strong);
+  &:hover:not(:disabled) {
+    background: var(--color-sunk);
+  }
+}
+
+/* Inputs on the quotation look like printed text until hovered or focused. */
+@utility inline-field {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 0.15rem 0.35rem;
+  margin: -0.15rem -0.35rem;
+  outline: none;
+  &:hover {
+    border-color: var(--color-line);
+    background: #fffdf9;
+  }
+  &:focus {
+    border-color: var(--color-brand);
+    background: #fff;
+    box-shadow: 0 0 0 3px rgb(138 75 28 / 0.15);
+  }
+}
+
+/* Edit mode: every editable detail shows its box. */
+@utility inline-field-on {
+  border-color: var(--color-line);
+  background: #fffdf9;
+}
+
+/* Frosted glass: needs something behind it to blur (the board's glow). */
+@utility glass {
+  background: rgb(255 255 255 / 0.55);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+  border: 1px solid rgb(255 255 255 / 0.75);
+  border-radius: 16px;
+  box-shadow:
+    0 8px 28px rgb(90 60 30 / 0.1),
+    inset 0 1px 0 rgb(255 255 255 / 0.7);
+}
+
+@utility glass-hover {
+  transition:
+    transform 150ms,
+    box-shadow 150ms;
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      0 14px 34px rgb(90 60 30 / 0.16),
+      inset 0 1px 0 rgb(255 255 255 / 0.7);
+  }
+}
+
+/* Home page: kraft board with faint corrugated lines. */
+.kraft-sheet {
+  background-color: #d9bc95;
+  background-image:
+    repeating-linear-gradient(90deg, rgb(110 72 34 / 0.07) 0 2px, transparent 2px 10px),
+    radial-gradient(ellipse at 75% 40%, rgb(255 240 215 / 0.55), transparent 60%);
+}
+
+/* Pill buttons in the board's own browns: filled, or outlined so the kraft shows through. */
+.kraft-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #4a2e16;
+  border-radius: 999px;
+  background: #4a2e16;
+  color: #fbeeda;
+  padding: 0.75rem 1.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+  transition:
+    background-color 150ms,
+    color 150ms,
+    transform 150ms;
+  &:hover {
+    background: #5e3c1e;
+    border-color: #5e3c1e;
+    transform: translateY(-1px);
+  }
+  &:focus-visible {
+    outline: 3px solid rgb(74 46 22 / 0.35);
+    outline-offset: 2px;
+  }
+}
+.kraft-btn-outline {
+  background: transparent;
+  color: #4a2e16;
+  &:hover {
+    background: #4a2e16;
+    border-color: #4a2e16;
+    color: #fbeeda;
+  }
+}
+
+.kraft-btn-sm {
+  padding: 0.35rem 1rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+/* A page on kraft: its panels turn to glass, its buttons to pills, its fields round. */
+.kraft-page .panel {
+  background: rgb(255 255 255 / 0.55);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+  border: 1px solid rgb(255 255 255 / 0.75);
+  border-radius: 16px;
+  box-shadow:
+    0 8px 28px rgb(90 60 30 / 0.1),
+    inset 0 1px 0 rgb(255 255 255 / 0.7);
+}
+.kraft-page .btn {
+  border-radius: 999px;
+  border: 2px solid #4a2e16;
+}
+.kraft-page .btn-primary {
+  background: #4a2e16;
+  color: #fbeeda;
+  &:hover:not(:disabled) {
+    background: #5e3c1e;
+    border-color: #5e3c1e;
+  }
+}
+.kraft-page .btn-quiet {
+  background: transparent;
+  color: #4a2e16;
+  &:hover:not(:disabled) {
+    background: #4a2e16;
+    color: #fbeeda;
+  }
+}
+/* Not the quotation's own fields: those must keep looking like printed text. */
+.kraft-page input:not(.inline-field),
+.kraft-page textarea:not(.inline-field) {
+  border-radius: 14px;
+  background: rgb(255 255 255 / 0.6);
+  border-color: rgb(74 46 22 / 0.3);
+}
+.kraft-page .text-ink-3 {
+  color: var(--color-ink-2);
+}
+
+/* A strip of brown packing tape, for a label. */
+.packing-tape {
+  display: inline-block;
+  padding: 0.3rem 1.1rem;
+  background: rgb(160 110 60 / 0.82);
+  color: #fff8ec;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transform: rotate(-1.5deg);
+  box-shadow: 0 1px 3px rgb(70 45 20 / 0.25);
+}
+
+/* The 3D carton: --w, --d, --h are its width, depth and height. */
+@property --flap-long {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 90deg;
+}
+@property --flap-short {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 90deg;
+}
+
+.carton-scene {
+  --w: 300px;
+  --d: 230px;
+  --h: 210px;
+  position: relative;
+  width: 460px;
+  height: 460px;
+  perspective: 1100px;
+}
+.carton {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transform: rotateX(-24deg) rotateY(-32deg);
+  animation:
+    carton-turn 18s linear infinite,
+    carton-flaps 12s ease-in-out infinite;
+}
+.carton-shadow {
+  position: absolute;
+  left: 50%;
+  top: 74%;
+  width: 380px;
+  height: 80px;
+  margin-left: -190px;
+  border-radius: 50%;
+  background: rgb(70 45 20 / 0.35);
+  filter: blur(26px);
+}
+.carton-face,
+.carton-flap,
+.carton-tape {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-style: preserve-3d;
+}
+/* The face itself is the inside of the box; its skin is the printed outside. */
+.carton-face {
+  background: #94693f;
+}
+.carton-front,
+.carton-back {
+  width: var(--w);
+  height: var(--h);
+  margin: calc(var(--h) / -2) 0 0 calc(var(--w) / -2);
+}
+.carton-left,
+.carton-right {
+  width: var(--d);
+  height: var(--h);
+  margin: calc(var(--h) / -2) 0 0 calc(var(--d) / -2);
+}
+.carton-front {
+  transform: translateZ(calc(var(--d) / 2));
+}
+.carton-back {
+  transform: rotateY(180deg) translateZ(calc(var(--d) / 2));
+}
+.carton-right {
+  transform: rotateY(90deg) translateZ(calc(var(--w) / 2));
+}
+.carton-left {
+  transform: rotateY(-90deg) translateZ(calc(var(--w) / 2));
+}
+.carton-bottom {
+  width: var(--w);
+  height: var(--d);
+  margin: calc(var(--d) / -2) 0 0 calc(var(--w) / -2);
+  transform: rotateX(-90deg) translateZ(calc(var(--h) / 2));
+  background: #7d5833;
+}
+.carton-skin {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: #5a3b1d;
+  backface-visibility: hidden;
+  transform: translateZ(0.5px);
+  background-color: #c79c6c;
+  background-image: repeating-linear-gradient(90deg, rgb(100 65 30 / 0.08) 0 1px, transparent 1px 7px);
+  box-shadow: inset 0 0 0 1px rgb(100 65 30 / 0.25);
+}
+.carton-skin-side {
+  background-color: #b78b5c;
+}
+.carton-brand {
+  font-family: var(--font-display);
+  font-size: 2.1rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+.carton-mark {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Flaps hinge on the top edge of each wall: 90deg is closed, a negative angle is open. */
+.carton-flap {
+  height: calc(var(--d) / 2);
+  margin-top: calc(var(--d) / -4);
+  transform-origin: 50% 100%;
+  background-color: #cfa678;
+  background-image: repeating-linear-gradient(0deg, rgb(100 65 30 / 0.08) 0 1px, transparent 1px 7px);
+  box-shadow: inset 0 0 0 1px rgb(100 65 30 / 0.3);
+}
+.carton-flap-front,
+.carton-flap-back {
+  width: var(--w);
+  margin-left: calc(var(--w) / -2);
+}
+.carton-flap-left,
+.carton-flap-right {
+  width: var(--d);
+  margin-left: calc(var(--d) / -2);
+  background-color: #bb9060;
+}
+.carton-flap-front {
+  transform: translateZ(calc(var(--d) / 2)) translateY(calc(var(--h) / -2 - var(--d) / 4 - 1px)) rotateX(var(--flap-long));
+}
+.carton-flap-back {
+  transform: rotateY(180deg) translateZ(calc(var(--d) / 2)) translateY(calc(var(--h) / -2 - var(--d) / 4 - 1px)) rotateX(var(--flap-long));
+}
+.carton-flap-right {
+  transform: rotateY(90deg) translateZ(calc(var(--w) / 2)) translateY(calc(var(--h) / -2 - var(--d) / 4)) rotateX(var(--flap-short));
+}
+.carton-flap-left {
+  transform: rotateY(-90deg) translateZ(calc(var(--w) / 2)) translateY(calc(var(--h) / -2 - var(--d) / 4)) rotateX(var(--flap-short));
+}
+.carton-tape {
+  width: var(--w);
+  height: 46px;
+  margin: -23px 0 0 calc(var(--w) / -2);
+  transform: rotateX(90deg) translateZ(calc(var(--h) / 2 + 3px));
+  background: rgb(150 100 52 / 0.75);
+  box-shadow: 0 0 2px rgb(70 45 20 / 0.4);
+  animation: carton-tape 12s ease-in-out infinite;
+}
+
+@keyframes carton-turn {
+  from {
+    transform: rotateX(-24deg) rotateY(-32deg);
+  }
+  to {
+    transform: rotateX(-24deg) rotateY(-392deg);
+  }
+}
+/* Closed and taped, long flaps open, short flaps open, then back the other way. */
+@keyframes carton-flaps {
+  0%,
+  34% {
+    --flap-long: 90deg;
+    --flap-short: 90deg;
+  }
+  44% {
+    --flap-long: -40deg;
+    --flap-short: 90deg;
+  }
+  52%,
+  76% {
+    --flap-long: -40deg;
+    --flap-short: -30deg;
+  }
+  84% {
+    --flap-long: -40deg;
+    --flap-short: 90deg;
+  }
+  94%,
+  100% {
+    --flap-long: 90deg;
+    --flap-short: 90deg;
+  }
+}
+@keyframes carton-tape {
+  0%,
+  30%,
+  98%,
+  100% {
+    opacity: 1;
+  }
+  34%,
+  94% {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 1023px) {
+  .carton-scene {
+    --w: 210px;
+    --d: 160px;
+    --h: 150px;
+    width: 320px;
+    height: 320px;
+    perspective: 800px;
+  }
+  .carton-shadow {
+    width: 260px;
+    height: 56px;
+    margin-left: -130px;
+  }
+  .carton-brand {
+    font-size: 1.5rem;
+  }
+  .carton-mark {
+    font-size: 0.6rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .carton,
+  .carton-tape {
+    animation: none;
+  }
 }

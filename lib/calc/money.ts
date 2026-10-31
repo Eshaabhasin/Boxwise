@@ -36,12 +36,24 @@ function pctOf(paise: number, basisPoints: number): number {
 }
 
 export function computeTotals(input: TotalsInput): Totals {
-  const { quantity, ratePaise, gstPercent, mode, roundToRupee = false } = input;
+  const { quantity, ratePaise, ...rest } = input;
+  return computeTotalsForLines({ ...rest, lines: [{ quantity, ratePaise }] });
+}
+
+/** Line amount: quantity × rate, whole paise. */
+export function lineAmount(quantity: number, ratePaise: number): number {
   if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("Quantity must be a whole number above 0");
   if (!Number.isInteger(ratePaise) || ratePaise < 0) throw new Error("Rate must be whole paise");
+  return quantity * ratePaise;
+}
+
+/** Totals for a quotation with many lines: GST is worked out once, on the subtotal. */
+export function computeTotalsForLines(input: Omit<TotalsInput, "quantity" | "ratePaise"> & { lines: readonly { quantity: number; ratePaise: number }[] }): Totals {
+  const { lines, gstPercent, mode, roundToRupee = false } = input;
+  if (lines.length === 0) throw new Error("A quotation needs at least one line");
   if (!(gstPercent >= 0 && gstPercent <= 28)) throw new Error("GST % must be between 0 and 28");
 
-  const subtotalPaise = quantity * ratePaise;
+  const subtotalPaise = lines.reduce((sum, l) => sum + lineAmount(l.quantity, l.ratePaise), 0);
   const bp = Math.round(gstPercent * 100);
   let cgstPaise = 0;
   let sgstPaise = 0;

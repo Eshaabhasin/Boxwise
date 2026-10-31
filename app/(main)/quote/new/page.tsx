@@ -1,34 +1,21 @@
-import CommandBox from "@/components/CommandBox";
+import NewQuoteInput from "@/components/NewQuoteInput";
 import Steps from "@/components/Steps";
+import { slab } from "@/lib/fonts";
 
-// Step 1: dictate the request. In phase 2 an approved card moves on to the
-// quotation screen (/quote/<id>) for rate, approval and sending.
+// Step 1: dictate the enquiry, all its boxes at once. An approved plan opens the enquiry's page.
 export default function StartQuotationPage() {
   return (
-    <div className="flex flex-col gap-8 pt-4">
-      <div>
-        <p className="eyebrow text-ink-2">New request</p>
-        <h1 className="mt-2 font-display text-5xl font-extrabold leading-[0.95] tracking-[-0.035em] md:text-6xl">
-          Start a quotation
-        </h1>
+    <div className="kraft-page flex flex-col gap-6 pt-8">
+      <div aria-hidden="true" className="kraft-sheet pointer-events-none fixed inset-0 -z-10" />
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="font-medium text-[#3a2412]">New enquiry</p>
+          <h1 className={`${slab.className} mt-1 text-5xl leading-none tracking-[-0.02em] text-[#3a2412] md:text-6xl`}>Start a quotation</h1>
+        </div>
+        <Steps current={1} />
       </div>
 
-      <Steps current={1} />
-
-      <div className="grid gap-8 md:grid-cols-[1.1fr_1fr]">
-        <CommandBox variant="request" />
-
-        <aside className="flex flex-col gap-4">
-          <div className="border-2 border-dashed border-ink/60 p-6">
-            <p className="font-display text-xl font-extrabold uppercase tracking-[0.015em]">Your box card appears here</p>
-            <p className="mt-2 text-sm leading-relaxed text-ink-2">
-              BoxBol reads the size, ply, load, quantity and print from what you say, and stamps{" "}
-              <span className="eyebrow border-2 border-brick px-1 text-[0.6rem] font-bold text-brick">Not said</span> on
-              anything the customer didn&apos;t mention. Say “approve” to save the card and go on to the rate.
-            </p>
-          </div>
-        </aside>
-      </div>
+      <NewQuoteInput />
     </div>
   );
 }

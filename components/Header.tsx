@@ -5,40 +5,39 @@ import { usePathname } from "next/navigation";
 import Logo from "@/components/Logo";
 
 const NAV = [
-  { href: "/board", label: "Board" },
-  { href: "/history", label: "Quotations" },
+  { href: "/board", label: "Enquiries", short: "Enquiries" },
+  { href: "/history", label: "Quotations", short: "Quotes" },
+  { href: "/settings", label: "Your company", short: "Company" },
 ] as const;
 
 export default function Header() {
   const pathname = usePathname();
   return (
-    <header className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 px-4 py-4 md:px-8">
-      <Link href="/" aria-label="Home">
-        <Logo />
-      </Link>
-      <nav className="flex items-center gap-2 text-sm">
-        {NAV.map((item) => {
-          const active = pathname.startsWith(item.href);
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              aria-current={active ? "page" : undefined}
-              className={`border-2 border-ink px-3 py-1.5 font-semibold ${
-                active ? "bg-ink text-cream" : "bg-transparent text-ink hover:bg-kraft-2"
-              }`}
-            >
-              {item.label}
-            </Link>
-          );
-        })}
-        <Link
-          href="/quote/new"
-          className="hidden border-2 border-dashed border-ink px-3 py-1.5 font-semibold text-ink hover:bg-kraft-2 sm:inline-block"
-        >
-          Start a quote
+    <header className="sticky top-0 z-30 border-b border-line bg-panel/90 backdrop-blur">
+      <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-2 px-4 md:px-8">
+        <Link href="/" aria-label="Home" className="shrink-0">
+          <Logo />
         </Link>
-      </nav>
+        <nav className="flex min-w-0 items-center gap-0.5 text-sm sm:gap-1">
+          {NAV.map((item) => {
+            const active = pathname.startsWith(item.href);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-current={active ? "page" : undefined}
+                className={`shrink-0 rounded-md px-2 py-1.5 font-medium sm:px-3 ${active ? "bg-sunk text-ink" : "text-ink-2 hover:text-ink"}`}
+              >
+                <span className="sm:hidden">{item.short}</span>
+                <span className="hidden sm:inline">{item.label}</span>
+              </Link>
+            );
+          })}
+          <Link href="/quote/new" className="btn btn-primary ml-2 hidden py-1.5 sm:inline-flex">
+            New quote
+          </Link>
+        </nav>
+      </div>
     </header>
   );
 }

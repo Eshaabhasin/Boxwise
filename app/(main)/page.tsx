@@ -1,27 +1,39 @@
 import Link from "next/link";
+import Box3D from "@/components/Box3D";
 import { APP_TAGLINE } from "@/lib/company";
+import { slab } from "@/lib/fonts";
 
-// Home: the headline and one way in. The button has focus, so Enter starts a quote.
+// Home: the headline and one way in, on kraft board, with the turning carton beside it.
+// The button has focus, so Enter starts a quote.
 export default function HomePage() {
   return (
-    <section className="flex flex-1 flex-col items-center justify-center py-16 text-center">
-      <p className="eyebrow text-brick">{APP_TAGLINE}</p>
-      <h1 className="mt-5 font-display text-[3.6rem] font-extrabold leading-[0.9] tracking-[-0.045em] text-ink sm:text-8xl lg:text-[8.5rem]">
-        Bolo,
-        <br />
-        box ready.
-      </h1>
-      <p className="mt-8 max-w-xl text-lg leading-relaxed text-ink-2 md:text-xl">
-        Say the customer&apos;s request out loud. BoxBol turns it into a box card, then into a quotation you approve and
-        send on WhatsApp.
-      </p>
-      <Link
-        href="/quote/new"
-        autoFocus
-        className="hard-shadow mt-10 inline-flex items-center gap-3 border-2 border-ink bg-brick px-7 py-4 font-display text-xl font-extrabold uppercase tracking-[0.015em] text-cream outline-none focus-visible:ring-4 focus-visible:ring-brick/30"
-      >
-        Start a quote <span aria-hidden="true">→</span>
-      </Link>
+    <section className="flex flex-1 items-center py-10">
+      <div aria-hidden="true" className="kraft-sheet pointer-events-none fixed inset-0 -z-10" />
+      <div className="grid w-full items-center gap-8 lg:grid-cols-[1.1fr_1fr]">
+        <div className="text-center lg:text-left">
+          <p className="packing-tape">{APP_TAGLINE}</p>
+          <h1 className={`${slab.className} mt-6 text-[3.8rem] font-bold leading-[0.95] tracking-[-0.02em] text-[#3a2412] sm:text-7xl lg:text-[6.5rem]`}>
+            Say it.
+            <br />
+            <span className="text-[#7a4a1f]">Quote it.</span>
+          </h1>
+          <p className="mx-auto mt-6 max-w-md text-lg font-medium leading-relaxed text-[#3a2412] lg:mx-0">
+            Say the customer&apos;s request, all the boxes in one go. Boxwise turns it into a professional quotation you can
+            check, edit and send.
+          </p>
+          <div className="mt-8 flex flex-wrap justify-center gap-3 lg:justify-start">
+            <Link href="/quote/new" autoFocus className="kraft-btn">
+              Start a quote →
+            </Link>
+            <Link href="/board" className="kraft-btn kraft-btn-outline">
+              Open enquiries
+            </Link>
+          </div>
+        </div>
+        <div className="flex justify-center">
+          <Box3D />
+        </div>
+      </div>
     </section>
   );
 }

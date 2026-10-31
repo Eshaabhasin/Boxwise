@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { config } from "dotenv";
 import { HarnessFile, compareCase, isDailyLimit, summarize, type CaseResult, type HarnessCase, type RunSummary } from "@/lib/harness/compare";
+import { collectCreate } from "@/lib/commands/changes";
 import { createLlm, llmEnvFromProcess } from "@/lib/nlp/llm";
 import { parseRequest } from "@/lib/nlp/parse";
 
@@ -44,7 +45,7 @@ async function main() {
   if (arg("model")) env.GROQ_MODEL = arg("model");
   const llm = createLlm(env, { maxRetries: 6, fallback: process.argv.includes("--fallback") });
 
-  console.log(`BoxBol harness: ${cases.length} requests, ${llm.provider} ${llm.model}, ${concurrency} at a time\n`);
+  console.log(`Boxwise harness: ${cases.length} requests, ${llm.provider} ${llm.model}, ${concurrency} at a time\n`);
   const started = new Date();
   const results: (CaseResult | undefined)[] = new Array(cases.length).fill(undefined);
   let next = 0;
@@ -55,7 +56,11 @@ async function main() {
       const i = next++;
       const c = cases[i] as HarnessCase;
       const r = await parseRequest(c.said, llm);
-      const result = compareCase(c, r.request, r.error ?? (r.intent && r.intent !== "create_request" ? `read as “${r.intent}”, not a new request` : null));
+      // The same steps the app takes: guard each value, then sort it into customer, terms and boxes.
+      const card = r.request ? collectCreate(r.request, r.boxes, r.command?.allBoxes) : null;
+      const dropped = [...(r.request?.dropped ?? []), ...r.boxes.flatMap((b) => b.guarded.dropped)];
+      const notCreate = r.intent && r.intent !== "create_request" ? `read as “${r.intent}”, not a new request` : null;
+      const result = compareCase(c, card, dropped, r.error ?? notCreate);
       results[i] = result;
       const time = DIM(`${(r.latencyMs / 1000).toFixed(1)}s`);
       if (result.serviceError) {

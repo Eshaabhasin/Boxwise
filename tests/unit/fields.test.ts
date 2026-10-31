@@ -12,9 +12,9 @@ describe("fields config", () => {
     }
   });
 
-  it("marks only the rate as owner-only", () => {
+  it("marks only the rate and one-time charges as owner-only", () => {
     const ownerOnly = FIELDS.filter((f) => "ownerOnly" in f && f.ownerOnly).map((f) => f.key);
-    expect(ownerOnly).toEqual(["ratePerBox"]);
+    expect(ownerOnly).toEqual(["ratePerBox", "dieCharge", "designCharge"]);
   });
 
   it("flags the spec example's missing fields", () => {
@@ -33,7 +33,8 @@ describe("fields config", () => {
       },
       "card",
     );
-    expect(missing.sort()).toEqual(["address", "flute", "joint", "style"]);
+    // Only what the formula needs: box type, colour and lamination ("do colour print" answers print).
+    expect(missing.sort()).toEqual(["boxType", "coating", "colour"]);
   });
 
   it("adds rate and terms only at quote time", () => {

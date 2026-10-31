@@ -28,8 +28,8 @@ async function ensureSrvResolves(uri: string): Promise<void> {
 async function connect(): Promise<typeof mongoose> {
   const uri = env().MONGODB_URI;
   await ensureSrvResolves(uri);
-  // dbName keeps data in "boxbol" even when the Atlas string has no database name in it.
-  return mongoose.connect(uri, { dbName: "boxbol", serverSelectionTimeoutMS: 8000 });
+  // MONGODB_DB picks the database, so the live site can use its own empty one.
+  return mongoose.connect(uri, { dbName: process.env.MONGODB_DB || "boxbol", serverSelectionTimeoutMS: 8000 });
 }
 
 export async function connectDb(): Promise<typeof mongoose> {

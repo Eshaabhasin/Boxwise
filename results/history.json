@@ -32,5 +32,40 @@
     "passRate": 96.7,
     "complete": true,
     "durationSec": 960
+  },
+  {
+    "at": "2026-10-27T15:14:29.454Z",
+    "model": "openai/gpt-oss-120b",
+    "total": 34,
+    "passed": 33,
+    "failed": [
+      "07-inner-e-flute"
+    ],
+    "notChecked": [],
+    "passRate": 97.1,
+    "complete": true,
+    "durationSec": 392
+  },
+  {
+    "at": "2026-10-30T04:03:49.445Z",
+    "model": "openai/gpt-oss-120b",
+    "total": 34,
+    "passed": 34,
+    "failed": [],
+    "notChecked": [],
+    "passRate": 100,
+    "complete": true,
+    "durationSec": 38407
+  },
+  {
+    "at": "2026-10-30T05:13:43.719Z",
+    "model": "openai/gpt-oss-120b",
+    "total": 34,
+    "passed": 34,
+    "failed": [],
+    "notChecked": [],
+    "passRate": 100,
+    "complete": true,
+    "durationSec": 311
   }
 ]

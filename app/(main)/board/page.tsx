@@ -1,5 +1,4 @@
 import BoardView from "@/components/BoardView";
-import CommandBox from "@/components/CommandBox";
 import { DEFAULT_FILTER, filterCounts, isBoardFilter, type BoxCardView } from "@/lib/board";
 import { getBoardCards, getStageCounts } from "@/lib/board-data";
 import { STAGES, type Stage } from "@/lib/fields";
@@ -19,10 +18,7 @@ export default async function BoardPage({ searchParams }: PageProps<"/board">) {
   }
 
   return (
-    <div className="flex flex-col gap-10 pt-4">
-      <div className="max-w-2xl">
-        <CommandBox variant="command" aside="Search, edit, move" />
-      </div>
+    <div className="flex flex-col gap-6 pt-6">
       <BoardView filter={filter} counts={filterCounts(perStage)} cards={cards} q={q} error={error} />
     </div>
   );

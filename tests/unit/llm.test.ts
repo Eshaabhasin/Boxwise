@@ -81,8 +81,14 @@ describe("prompt size", () => {
     const chars = buildMessages("Sharma Packaging 500 box", "new quote")
       .map((m) => m.content)
       .join("\n").length;
-    // About 3.6 characters per token: 9,000 characters is roughly 2,500 tokens.
-    expect(chars).toBeLessThan(9000);
+    // About 3.6 characters per token: 10,500 characters is roughly 2,900 tokens.
+    expect(chars).toBeLessThan(10500);
     expect(systemPrompt()).toContain("ratePerBox");
+  });
+
+  it("says that '5000 box' is a quantity, not a number of boxes (harness 07-inner-e-flute)", () => {
+    // Regression: after multi-box support, gpt-oss-120b dropped "5000 box" from
+    // "... 3 ply E flute 5000 box ..." three runs out of three, reading it as a count of boxes.
+    expect(systemPrompt()).toMatch(/"<number> box \/ boxes \/ piece \/ pcs \/ nag" is the quantity/);
   });
 });

@@ -1,5 +1,5 @@
 import "server-only";
-import { buildCardView, stagesFor, type BoardFilter, type BoxCardView } from "@/lib/board";
+import { buildCardView, searchTerms, stagesFor, type BoardFilter, type BoxCardView } from "@/lib/board";
 import { connectDb } from "@/lib/db";
 import { STAGES, type Stage } from "@/lib/fields";
 import { Quotation, Request } from "@/lib/models";
@@ -8,10 +8,12 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Cards removed by "undo" stay in the database but never show. */
+/** Cards removed by "undo" stay in the database but never show. Search finds a REQ number or part of a company name. */
 function companyFilter(q: string) {
   const live = { deletedAt: null };
-  return q ? { ...live, customerName: { $regex: escapeRegex(q), $options: "i" } } : live;
+  const { number, company } = searchTerms(q);
+  if (number !== undefined) return { ...live, number };
+  return company ? { ...live, customerName: { $regex: escapeRegex(company), $options: "i" } } : live;
 }
 
 export async function getStageCounts(q = ""): Promise<Record<Stage, number>> {
@@ -40,7 +42,7 @@ export async function getBoardCards(filter: BoardFilter, q = ""): Promise<BoxCar
       number: d.number,
       customerName: d.customerName,
       stage: d.stage,
-      specs: d.specs,
+      boxes: d.items ?? [],
       missing: d.missing,
       hasDraftQuote: hasDraft.has(d._id.toString()),
     }),

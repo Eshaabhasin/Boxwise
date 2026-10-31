@@ -2,6 +2,7 @@ import "server-only";
 import { Types } from "mongoose";
 import { connectDb } from "@/lib/db";
 import { Quotation, Request } from "@/lib/models";
+import { getCompany } from "@/lib/settings";
 
 /**
  * Records that the owner sent an approved quotation: the quotation becomes
@@ -19,6 +20,7 @@ export async function markSent(quotationId: string, via: "share" | "link"): Prom
   const firstTime = quote.status !== "Sent";
   quote.status = "Sent";
   quote.sentAt = now;
+  if (!quote.seller) quote.seller = await getCompany();
   await quote.save();
 
   const request = await Request.findById(quote.requestId);
@@ -29,8 +31,7 @@ export async function markSent(quotationId: string, via: "share" | "link"): Prom
       planId: new Types.ObjectId(),
       action: "stage",
       quotationId: quote._id,
-      summary: `Sent ${quote.number ?? "quotation"} on WhatsApp${via === "link" ? " (text with PDF link)" : ""}`,
-      changes: [],
+      summary: `Sent ${quote.number ?? "quotation"}${via === "link" ? " (text with PDF link)" : ""}`,
       stageBefore: before,
       stageAfter: request.stage,
       undone: false,

@@ -16,7 +16,7 @@ describe("guard keeps what was said", () => {
     );
     expect(g.dropped).toEqual([]);
     expect(g.customer).toEqual({ company: "Sharma Packaging" });
-    expect(g.specs).toEqual({ quantity: 500, length: 304.8, breadth: 254, height: 203.2, dimUnit: "inch", ply: 5, loadKg: 30, printColours: 2 });
+    expect(g.specs).toEqual({ quantity: 500, length: 304.8, breadth: 254, height: 203.2, dimUnit: "inch", ply: 5, loadKg: 30, printColours: 2, print: "Multi-colour" });
   });
 
   it("accepts 'plain' as 0 colours", () => {
@@ -58,7 +58,7 @@ describe("guard drops what was not said (golden rule 2)", () => {
   });
 
   it("drops unknown keys", () => {
-    expect(guardRequestFields({ colour: "red" }, "red").dropped[0]?.reason).toMatch(/not a field/);
+    expect(guardRequestFields({ shade: "red" }, "red").dropped[0]?.reason).toMatch(/not a field/);
   });
 });
 
@@ -101,8 +101,10 @@ describe("prompt examples agree with the guard", () => {
     const parsed = LlmCommandOutput.parse(output);
     if (!["create_request", "repeat_request", "edit_request", "set_rate"].includes(parsed.intent)) return;
     const text = input.replace(/^Earlier: /, "").replace(/\. Correction: /, " ");
-    const g = guardRequestFields(parsed.fields, normalize(text), { allowRate: parsed.intent === "set_rate" });
-    expect(g.dropped).toEqual([]);
+    const opts = { allowRate: parsed.intent === "set_rate" };
+    for (const fields of [parsed.fields, ...parsed.boxes.map((b) => b.fields)]) {
+      expect(guardRequestFields(fields, normalize(text), opts).dropped).toEqual([]);
+    }
   });
 });
 
@@ -143,5 +145,31 @@ describe("contact person names (harness 09-contact-phone)", () => {
   it("leaves company names alone", () => {
     const text = normalize("Shree Ganesh Traders 500 box");
     expect(guardRequestFields({ company: "Shree Ganesh Traders" }, text).customer.company).toBe("Shree Ganesh Traders");
+  });
+});
+
+describe("choices said in many ways (topic words)", () => {
+  it("keeps the design reading when design was talked about", () => {
+    const g = guardRequestFields({ artwork: "We design" }, "design we really want to have a design we dont have any design");
+    expect(g.specs.artwork).toBe("We design");
+  });
+  it("keeps a choice read from other words, and asks him to check it", () => {
+    const g = guardRequestFields({ boxType: "Carton", colour: "Brown" }, "regular shipper type thing kraft colour");
+    expect(g.specs).toMatchObject({ boxType: "Carton", colour: "Brown" });
+    expect(g.unsure).toEqual([{ field: "boxType", value: "Carton" }]);
+  });
+  it("never trusts a number that was not said", () => {
+    expect(guardRequestFields({ quantity: 1000, ply: 5 }, "regular shipper type thing").dropped.map((d) => d.field)).toEqual(["quantity", "ply"]);
+  });
+});
+
+describe("inner carton is a box type", () => {
+  it("does not make the size an inner size", () => {
+    const g = guardRequestFields({ boxType: "Inner carton", sizeType: "Inner" }, "inner carton 4 by 3 by 4 inch");
+    expect(g.specs.sizeType).toBeUndefined();
+    expect(g.specs.boxType).toBe("Inner carton");
+  });
+  it("keeps an inner size that was said", () => {
+    expect(guardRequestFields({ sizeType: "Inner" }, "inner size 4 by 3 by 4 inch").specs.sizeType).toBe("Inner");
   });
 });

@@ -4,7 +4,7 @@
  * inside a long sentence is not taken as approval.
  */
 
-export type FastCommand = "approve" | "cancel" | "undo" | "send";
+export type FastCommand = "approve" | "cancel" | "undo" | "send" | "edit";
 
 const PHRASES: Record<FastCommand, readonly string[]> = {
   approve: [
@@ -17,6 +17,11 @@ const PHRASES: Record<FastCommand, readonly string[]> = {
     "nahi chahiye", "mat karo", "drop it", "forget it", "no cancel",
   ],
   send: ["send", "send it", "send karo", "send kar do", "bhej do", "bhejo", "bhej", "share", "share karo", "whatsapp karo", "whatsapp kar do", "whatsapp pe bhej do"],
+  edit: [
+    "edit", "edit pdf", "edit the pdf", "pdf edit", "pdf edit karo", "pdf edit karna hai", "pdf edit karni hai", "i want to edit pdf",
+    "i want to edit quotation", "edit quotation", "quotation edit karo", "quotation edit karna hai", "edit karna hai", "edit karo",
+    "pdf badalna hai", "quotation badalna hai",
+  ],
   undo: ["undo", "undo karo", "undo kar do", "wapas karo", "wapas", "pehle jaisa karo", "pehle jaisa kar do", "revert"],
 };
 
@@ -28,7 +33,7 @@ function clean(text: string): string {
 
 export function fastCommand(text: string): FastCommand | null {
   const c = clean(text);
-  if (!c || c.split(" ").length > 4) return null;
+  if (!c || c.split(" ").length > 6) return null;
   for (const [cmd, phrases] of Object.entries(PHRASES) as [FastCommand, readonly string[]][]) {
     if (phrases.some((p) => clean(p) === c)) return cmd;
   }

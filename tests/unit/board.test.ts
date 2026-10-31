@@ -1,3 +1,4 @@
+import { splitSummary } from "@/lib/card";
 import { describe, expect, it } from "vitest";
 import { buildCardView, filterCounts, stagesFor, waitingOn } from "@/lib/board";
 
@@ -34,37 +35,50 @@ describe("waiting on", () => {
   });
 });
 
-describe("box card view", () => {
-  it("shows the spec example the way the PDF does", () => {
+describe("enquiry card view", () => {
+  const sharma = { length: 304.8, breadth: 254, height: 203.2, dimUnit: "inch", ply: 5, loadKg: 30, quantity: 500, printColours: 2 } as const;
+
+  it("shows one line per box and the total pieces", () => {
     const view = buildCardView({
       id: "x",
       number: 16,
       customerName: "Sharma Packaging",
       stage: "New",
-      specs: { length: 304.8, breadth: 254, height: 203.2, dimUnit: "inch", ply: 5, loadKg: 30, quantity: 500, printColours: 2 },
+      boxes: [{ specs: sharma }, { specs: { length: 457.2, breadth: 304.8, height: 254, dimUnit: "inch", ply: 7, quantity: 300 } }],
       missing: ["flute", "style", "joint", "address"],
     });
     expect(view.ref).toBe("REQ-016");
-    expect(view.size).toBe("12 × 10 × 8 IN");
-    expect(view.ply).toBe("5");
-    expect(view.load).toBe("30 KG");
-    expect(view.quantity).toBe("500");
-    expect(view.print).toBe("2-colour");
+    expect(view.boxCount).toBe(2);
+    expect(view.boxes[0]).toEqual({ label: "Box 1", summary: "12 × 10 × 8 inch · 5 ply · 30 kg · 2-colour · 500 pcs" });
+    expect(view.boxes[1]?.summary).toBe("18 × 12 × 10 inch · 7 ply · 300 pcs");
+    expect(view.totalQuantity).toBe("800");
     expect(view.missing).toEqual(["Flute", "Style", "Joint", "Address"]);
     expect(view.waitingOn).toBe("Customer info");
   });
 
-  it("collapses missing sides into one Size tag and shows plain print", () => {
-    const view = buildCardView({
-      id: "y",
-      customerName: "X",
-      stage: "New",
-      specs: { printColours: 0, quantity: 1000 },
-      missing: ["length", "breadth", "height"],
-    });
+  it("shows at most three boxes but counts them all", () => {
+    const view = buildCardView({ id: "y", customerName: "X", stage: "New", boxes: Array.from({ length: 5 }, () => ({ specs: { quantity: 100 } })), missing: [] });
+    expect(view.boxes).toHaveLength(3);
+    expect(view.boxCount).toBe(5);
+    expect(view.totalQuantity).toBe("500");
+  });
+
+  it("collapses missing sides into one Size tag", () => {
+    const view = buildCardView({ id: "z", customerName: "X", stage: "New", boxes: [{ specs: {} }], missing: ["length", "breadth", "height"] });
     expect(view.missing).toEqual(["Size"]);
-    expect(view.size).toBeNull();
-    expect(view.print).toBe("Plain");
-    expect(view.quantity).toBe("1,000");
+    expect(view.totalQuantity).toBeNull();
+  });
+});
+
+describe("a box on a card", () => {
+  it("splits type and size, details and rate", () => {
+    expect(splitSummary("Carton · 10 × 6 × 4 inch · 3 ply · white · 1,000 pcs · @ ₹20.75")).toEqual({
+      title: "Carton · 10 × 6 × 4 inch",
+      details: "3 ply · white · 1,000 pcs",
+      rate: "₹20.75",
+    });
+  });
+  it("copes with no size and no rate", () => {
+    expect(splitSummary("Self-lock · 3 ply · brown")).toEqual({ title: "Self-lock", details: "3 ply · brown", rate: null });
   });
 });

@@ -12,8 +12,8 @@ describe("WhatsApp links", () => {
   });
 
   it("builds a wa.me link with the text encoded", () => {
-    expect(waLink("9876543210", "Namaste ji, total ₹10,620.00")).toBe(
-      "https://wa.me/919876543210?text=Namaste%20ji%2C%20total%20%E2%82%B910%2C620.00",
+    expect(waLink("9876543210", "Dear Sir, total ₹10,620.00")).toBe(
+      "https://wa.me/919876543210?text=Dear%20Sir%2C%20total%20%E2%82%B910%2C620.00",
     );
   });
 
@@ -24,7 +24,7 @@ describe("WhatsApp links", () => {
   it("puts the PDF link under the message", () => {
     const url = publicPdfUrl("https://boxbol.example.com/", "abc123");
     expect(url).toBe("https://boxbol.example.com/q/abc123");
-    expect(textWithPdfLink("Namaste", url)).toBe("Namaste\n\nQuotation PDF: https://boxbol.example.com/q/abc123");
+    expect(textWithPdfLink("Dear Sir", url)).toBe("Dear Sir\n\nQuotation PDF: https://boxbol.example.com/q/abc123");
   });
 
   it("names PDF files without slashes", () => {
